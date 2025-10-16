@@ -8,19 +8,19 @@ from fastapi import FastAPI
 
 from .api import register_routes
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+)
 
-def create_app() -> FastAPI:
-    """Create and configure the FastAPI application instance."""
+logger = logging.getLogger(__name__)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    )
-    logging.getLogger(__name__).info("Инициализация приложения MishPulse")
-
-    application = FastAPI(title="MishPulse", version="0.1.0")
-    register_routes(application)
-    return application
+app = FastAPI(title="MishPulse", version="0.1.0")
+register_routes(app)
 
 
-app = create_app()
+@app.on_event("startup")
+async def log_startup_message() -> None:
+    """Log a startup message once the application is ready."""
+
+    logger.info("Инициализация приложения MishPulse")
