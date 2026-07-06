@@ -16,6 +16,8 @@ class Settings:
     watchdog_interval_seconds: float = 30.0
     # URL для webhook-уведомлений (если не задан — уведомления только в лог)
     webhook_url: str | None = None
+    # Строка подключения SQLAlchemy (SQLite по умолчанию, Postgres в docker-compose)
+    database_url: str = "sqlite:///./mishpulse.db"
 
 
 def load_settings() -> Settings:
@@ -27,6 +29,10 @@ def load_settings() -> Settings:
             os.getenv("MISHPULSE_WATCHDOG_INTERVAL_SECONDS", "30")
         ),
         webhook_url=os.getenv("MISHPULSE_WEBHOOK_URL") or None,
+        database_url=os.getenv(
+            "MISHPULSE_DATABASE_URL",
+            "sqlite:///./mishpulse.db",
+        ),
     )
 
 

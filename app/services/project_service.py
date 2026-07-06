@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from threading import RLock
-from typing import Dict
-from uuid import uuid4
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import Project, ProjectHealth, Status, StatusLevel
+from ..models import Project, Status, StatusLevel
+from ..repositories import ProjectRepository
 from ..schemas import StatusCreateRequest
 from .notifier import Notifier, notifier as default_notifier
 
@@ -30,116 +29,103 @@ class ProjectService:
     """Сервис для работы с проектами."""
 
     def __init__(self, notifier: Notifier | None = None) -> None:
-        # Хранилище проектов по токену
-        self._projects: Dict[str, Project] = {}
-        # Блокировка для потокобезопасного доступа
-        self._lock = RLock()
         self._notifier = notifier or default_notifier
 
-    def create_project(self, name: str) -> Project:
+    def create_project(self, session: Session, name: str) -> Project:
         """Создать новый проект и сгенерировать уникальную ссылку."""
 
-        with self._lock:
-            token = uuid4().hex
-            project_id = uuid4()
-            now = datetime.now(timezone.utc)
-            project = Project(
-                id=project_id,
-                name=name,
-                token=token,
-                created_at=now,
-                last_seen=now,
-            )
-            self._projects[token] = project
-            logger.info("Создан проект %s с токеном %s", project_id, token)
-            return project
+        repo = ProjectRepository(session)
+        now = datetime.now(timezone.utc)
+        project = repo.create_project(name, now=now)
+        session.commit()
+        logger.info("Создан проект %s с токеном %s", project.id, project.token)
+        return project
 
-    def add_status(self, token: str, payload: StatusCreateRequest) -> Status:
+    def add_status(self, session: Session, token: str, payload: StatusCreateRequest) -> Status:
         """Добавить новый статус проекту."""
 
-        with self._lock:
-            project = self._get_project_or_404(token)
+        repo = ProjectRepository(session)
+        project_row = repo.get_by_token(token)
+        if project_row is None:
+            logger.warning("Запрос с неизвестным токеном %s", token)
+            raise HTTPException(status_code=404, detail="Проект не найден")
 
-            # Используем текущее время, если оно не было передано
-            timestamp = _to_utc(payload.timestamp or datetime.now(timezone.utc))
+        timestamp = _to_utc(payload.timestamp or datetime.now(timezone.utc))
+        last_status = repo.get_last_status(project_row.id)
+        if last_status is not None and timestamp <= _to_utc(last_status.timestamp):
+            logger.error(
+                "Получен статус с прошедшим временем от проекта %s: %s <= %s",
+                project_row.id,
+                timestamp,
+                last_status.timestamp,
+            )
+            raise HTTPException(status_code=400, detail="Время статуса должно увеличиваться")
 
-            # Проверяем, что время статуса не меньше последнего полученного
-            if project.statuses and timestamp <= project.statuses[-1].timestamp:
-                logger.error(
-                    "Получен статус с прошедшим временем от проекта %s: %s <= %s",
-                    project.id,
-                    timestamp,
-                    project.statuses[-1].timestamp,
-                )
-                raise HTTPException(status_code=400, detail="Время статуса должно увеличиваться")
-
-            status = Status(level=payload.level, message=payload.message, timestamp=timestamp)
-            project.statuses.append(status)
-            project.last_seen = timestamp
-            was_dead = project.health is ProjectHealth.DEAD
-            project.health = {
-                StatusLevel.OK: ProjectHealth.ALIVE,
-                StatusLevel.WARNING: ProjectHealth.WARNING,
-                StatusLevel.ERROR: ProjectHealth.ERROR,
-            }[status.level]
-            logger.info("Добавлен статус для проекта %s (%s)", project.id, status.level.value)
+        was_dead = project_row.health == "dead"
+        status = Status(level=payload.level, message=payload.message, timestamp=timestamp)
+        repo.add_status(project_row, status)
+        session.commit()
+        logger.info("Добавлен статус для проекта %s (%s)", project_row.id, status.level.value)
 
         if status.level is StatusLevel.ERROR:
             self._notifier.notify(
-                f"Проект «{project.name}» сообщил об ошибке",
+                f"Проект «{project_row.name}» сообщил об ошибке",
                 {
-                    "project": str(project.id),
+                    "project": str(project_row.id),
                     "message": status.message,
                     "timestamp": status.timestamp.isoformat(),
                 },
             )
         elif was_dead:
             self._notifier.notify(
-                f"Проект «{project.name}» снова на связи",
+                f"Проект «{project_row.name}» снова на связи",
                 {
-                    "project": str(project.id),
+                    "project": str(project_row.id),
                     "timestamp": status.timestamp.isoformat(),
                 },
             )
         return status
 
-    def get_statuses(self, token: str) -> list[Status]:
+    def get_statuses(self, session: Session, token: str) -> list[Status]:
         """Получить список статусов проекта по токену."""
 
-        with self._lock:
-            project = self._get_project_or_404(token)
-            # Возвращаем копию списка для защиты внутреннего состояния
-            return list(project.statuses)
+        repo = ProjectRepository(session)
+        project_row = repo.get_by_token(token)
+        if project_row is None:
+            logger.warning("Запрошены статусы неизвестного токена %s", token)
+            raise HTTPException(status_code=404, detail="Проект не найден")
+        return repo.list_statuses(project_row.id)
 
-    def get_project_states(self) -> list[Project]:
+    def get_project_states(self, session: Session) -> list[Project]:
         """Вернуть снимок всех проектов для сводки/дашборда."""
 
-        with self._lock:
-            return [project.model_copy(deep=True) for project in self._projects.values()]
+        return ProjectRepository(session).list_projects()
 
-    def mark_dead_projects(self, dead_after_seconds: float | None = None) -> list[Project]:
-        """Пометить проекты без пульса как «мёртвые» и уведомить о них.
-
-        Возвращает список проектов, которые перешли в состояние DEAD на этом проходе.
-        """
+    def mark_dead_projects(
+        self,
+        session: Session | None = None,
+        dead_after_seconds: float | None = None,
+    ) -> list[Project]:
+        """Пометить проекты без пульса как «мёртвые» и уведомить о них."""
 
         timeout = dead_after_seconds if dead_after_seconds is not None else settings.dead_after_seconds
-        now = datetime.now(timezone.utc)
-        newly_dead: list[Project] = []
+        threshold = datetime.now(timezone.utc) - timedelta(seconds=timeout)
+        own_session = session is None
+        from ..db.session import SessionLocal
 
-        with self._lock:
-            for project in self._projects.values():
-                if project.health is ProjectHealth.DEAD:
-                    continue
-                silence = (now - project.last_seen).total_seconds()
-                if silence > timeout:
-                    project.health = ProjectHealth.DEAD
-                    newly_dead.append(project)
-                    logger.warning(
-                        "Проект %s молчит %.0f сек. и помечен как мёртвый",
-                        project.id,
-                        silence,
-                    )
+        db = session or SessionLocal()
+        try:
+            repo = ProjectRepository(db)
+            newly_dead = repo.mark_dead_before(threshold)
+            for project in newly_dead:
+                logger.warning("Проект %s помечен как мёртвый", project.id)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            if own_session:
+                db.close()
 
         for project in newly_dead:
             self._notifier.notify(
@@ -151,12 +137,22 @@ class ProjectService:
             )
         return newly_dead
 
-    def _get_project_or_404(self, token: str) -> Project:
-        project = self._projects.get(token)
-        if project is None:
-            logger.warning("Запрос с неизвестным токеном %s", token)
+    def set_last_seen(self, session: Session, token: str, last_seen: datetime) -> None:
+        """Обновить время последнего пульса (используется в тестах)."""
+
+        repo = ProjectRepository(session)
+        if repo.set_last_seen(token, last_seen) is None:
             raise HTTPException(status_code=404, detail="Проект не найден")
-        return project
+        session.commit()
+
+    def get_health(self, session: Session, token: str):
+        """Получить текущее состояние проекта."""
+
+        repo = ProjectRepository(session)
+        health = repo.get_health(token)
+        if health is None:
+            raise HTTPException(status_code=404, detail="Проект не найден")
+        return health
 
 
 # Создаем единственный экземпляр сервиса для использования в обработчиках

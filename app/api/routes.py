@@ -4,7 +4,9 @@ from html import escape
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import HTMLResponse
+from sqlalchemy.orm import Session
 
+from ..db import get_db
 from ..models import ProjectHealth
 from ..schemas import (
     ProjectCreateRequest,
@@ -53,11 +55,12 @@ async def healthcheck() -> dict[str, str]:
 )
 async def create_project(
     payload: ProjectCreateRequest,
+    session: Session = Depends(get_db),
     service: ProjectService = Depends(get_project_service),
 ) -> ProjectResponse:
     """Создать новый проект и вернуть ссылку для отправки статусов."""
 
-    project = service.create_project(payload.name)
+    project = service.create_project(session, payload.name)
     link = f"/projects/{project.token}/statuses"
     return ProjectResponse(id=project.id, name=project.name, link=link)
 
@@ -68,6 +71,7 @@ async def create_project(
     summary="Сводка состояния всех проектов",
 )
 async def projects_summary(
+    session: Session = Depends(get_db),
     service: ProjectService = Depends(get_project_service),
 ) -> list[ProjectStateResponse]:
     """Вернуть текущее состояние всех проектов."""
@@ -78,9 +82,9 @@ async def projects_summary(
             name=project.name,
             health=project.health,
             last_seen=project.last_seen,
-            last_message=project.statuses[-1].message if project.statuses else None,
+            last_message=project.last_message,
         )
-        for project in service.get_project_states()
+        for project in service.get_project_states(session)
     ]
 
 
@@ -90,20 +94,20 @@ async def projects_summary(
     summary="Минимальный HTML-дашборд состояния проектов",
 )
 async def dashboard(
+    session: Session = Depends(get_db),
     service: ProjectService = Depends(get_project_service),
 ) -> HTMLResponse:
     """Простая HTML-страница со статусами всех проектов."""
 
     rows = []
-    for project in service.get_project_states():
+    for project in service.get_project_states(session):
         icon = _HEALTH_ICONS[project.health]
-        last_message = project.statuses[-1].message if project.statuses else ""
         rows.append(
             "<tr>"
             f"<td>{icon} {escape(project.name)}</td>"
             f"<td>{escape(project.health.value)}</td>"
             f"<td>{escape(project.last_seen.strftime('%Y-%m-%d %H:%M:%S %Z'))}</td>"
-            f"<td>{escape(last_message)}</td>"
+            f"<td>{escape(project.last_message or '')}</td>"
             "</tr>"
         )
     body = "".join(rows) or '<tr><td colspan="4">Проектов пока нет</td></tr>'
@@ -140,11 +144,12 @@ async def dashboard(
 async def push_status(
     token: str,
     payload: StatusCreateRequest,
+    session: Session = Depends(get_db),
     service: ProjectService = Depends(get_project_service),
 ) -> StatusResponse:
     """Принять статус по уникальной ссылке проекта."""
 
-    status = service.add_status(token, payload)
+    status = service.add_status(session, token, payload)
     return StatusResponse(level=status.level, message=status.message, timestamp=status.timestamp)
 
 
@@ -155,11 +160,12 @@ async def push_status(
 )
 async def list_statuses(
     token: str,
+    session: Session = Depends(get_db),
     service: ProjectService = Depends(get_project_service),
 ) -> list[StatusResponse]:
     """Вернуть историю статусов проекта."""
 
-    statuses = service.get_statuses(token)
+    statuses = service.get_statuses(session, token)
     return [
         StatusResponse(level=s.level, message=s.message, timestamp=s.timestamp)
         for s in statuses

@@ -46,4 +46,5 @@ class Project(BaseModel):
     health: ProjectHealth = Field(
         default=ProjectHealth.ALIVE, description="Текущее состояние проекта"
     )
+    last_message: str | None = Field(default=None, description="Текст последнего статуса")
     statuses: List[Status] = Field(default_factory=list, description="История статусов проекта")
