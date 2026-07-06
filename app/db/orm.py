@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import List
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -23,6 +23,9 @@ class ProjectORM(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     health: Mapped[str] = mapped_column(String(20), nullable=False, default="alive")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    timeout_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    retention_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     ntfy_server: Mapped[str | None] = mapped_column(String(500), nullable=True)
     ntfy_topic: Mapped[str | None] = mapped_column(String(200), nullable=True)

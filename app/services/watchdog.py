@@ -53,5 +53,6 @@ class Watchdog:
             await asyncio.sleep(self._interval)
             try:
                 self._service.mark_dead_projects()
+                self._service.cleanup_old_statuses()
             except Exception:
                 logger.exception("Ошибка при проверке пульса проектов")

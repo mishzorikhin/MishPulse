@@ -12,6 +12,8 @@ class Settings:
 
     # Через сколько секунд молчания проект считается «мёртвым»
     dead_after_seconds: float = 300.0
+    # Сколько дней хранить историю статусов по умолчанию
+    status_retention_days: int = 30
     # Как часто watchdog проверяет пульс проектов
     watchdog_interval_seconds: float = 30.0
     # URL для webhook-уведомлений (если не задан — уведомления только в лог)
@@ -31,6 +33,7 @@ def load_settings() -> Settings:
 
     return Settings(
         dead_after_seconds=float(os.getenv("MISHPULSE_DEAD_AFTER_SECONDS", "300")),
+        status_retention_days=int(os.getenv("MISHPULSE_STATUS_RETENTION_DAYS", "30")),
         watchdog_interval_seconds=float(
             os.getenv("MISHPULSE_WATCHDOG_INTERVAL_SECONDS", "30")
         ),

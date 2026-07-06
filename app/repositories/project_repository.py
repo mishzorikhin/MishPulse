@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..models import Project, ProjectHealth, ProjectNotifications, Status, StatusLevel
@@ -40,6 +40,9 @@ def _to_domain(project: ProjectORM, statuses: list[StatusORM] | None = None) -> 
         created_at=project.created_at,
         last_seen=project.last_seen,
         health=ProjectHealth(project.health),
+        enabled=project.enabled,
+        timeout_seconds=project.timeout_seconds,
+        retention_days=project.retention_days,
         last_message=project.last_message,
         notifications=_notifications_from_row(project),
         statuses=[
@@ -60,6 +63,8 @@ class ProjectRepository:
         name: str,
         *,
         now: datetime,
+        timeout_seconds: float | None = None,
+        retention_days: int | None = None,
         notifications: ProjectNotifications | None = None,
     ) -> Project:
         """Создать проект с уникальным токеном."""
@@ -71,6 +76,9 @@ class ProjectRepository:
             created_at=now,
             last_seen=now,
             health=ProjectHealth.ALIVE.value,
+            enabled=True,
+            timeout_seconds=timeout_seconds,
+            retention_days=retention_days,
         )
         _apply_notifications(row, notifications)
         self._session.add(row)
@@ -95,6 +103,43 @@ class ProjectRepository:
         _apply_notifications(row, notifications)
         self._session.flush()
         return _to_domain(row, statuses=[])
+
+    def update_project(
+        self,
+        token: str,
+        *,
+        name: str | None = None,
+        enabled: bool | None = None,
+        timeout_seconds: float | None = None,
+        retention_days: int | None = None,
+        update_timeout: bool = False,
+        update_retention: bool = False,
+    ) -> Project | None:
+        """Обновить основные настройки проекта."""
+
+        row = self.get_by_token(token)
+        if row is None:
+            return None
+        if name is not None:
+            row.name = name
+        if enabled is not None:
+            row.enabled = enabled
+        if update_timeout:
+            row.timeout_seconds = timeout_seconds
+        if update_retention:
+            row.retention_days = retention_days
+        self._session.flush()
+        return _to_domain(row, statuses=[])
+
+    def delete_project(self, token: str) -> bool:
+        """Удалить проект вместе с историей статусов."""
+
+        row = self.get_by_token(token)
+        if row is None:
+            return False
+        self._session.delete(row)
+        self._session.flush()
+        return True
 
     def list_projects(self) -> list[Project]:
         rows = self._session.scalars(select(ProjectORM).order_by(ProjectORM.created_at)).all()
@@ -139,17 +184,33 @@ class ProjectRepository:
         self._session.flush()
         return status
 
-    def mark_dead_before(self, threshold: datetime) -> list[Project]:
-        """Пометить молчащие проекты как dead и вернуть только что помеченные."""
+    def list_watchdog_candidates(self) -> list[ProjectORM]:
+        """Вернуть включённые проекты, которые ещё не помечены как dead."""
 
-        rows = self._session.scalars(
-            update(ProjectORM)
-            .where(ProjectORM.health != ProjectHealth.DEAD.value)
-            .where(ProjectORM.last_seen < threshold)
-            .values(health=ProjectHealth.DEAD.value)
-            .returning(ProjectORM)
-        ).all()
-        return [_to_domain(row, statuses=[]) for row in rows]
+        return list(
+            self._session.scalars(
+                select(ProjectORM)
+                .where(ProjectORM.enabled.is_(True))
+                .where(ProjectORM.health != ProjectHealth.DEAD.value)
+            ).all()
+        )
+
+    def mark_dead(self, project: ProjectORM) -> Project:
+        """Пометить проект как dead."""
+
+        project.health = ProjectHealth.DEAD.value
+        self._session.flush()
+        return _to_domain(project, statuses=[])
+
+    def prune_statuses_before(self, project_id: UUID, cutoff: datetime) -> int:
+        """Удалить статусы проекта старше cutoff."""
+
+        result = self._session.execute(
+            delete(StatusORM)
+            .where(StatusORM.project_id == project_id)
+            .where(StatusORM.timestamp < cutoff)
+        )
+        return int(result.rowcount or 0)
 
     def set_last_seen(self, token: str, last_seen: datetime) -> ProjectORM | None:
         """Обновить last_seen (для тестов и служебных сценариев)."""

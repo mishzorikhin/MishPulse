@@ -12,7 +12,7 @@ from ..config import settings
 from ..models import Project, ProjectNotifications, Status, StatusLevel
 from ..repositories import ProjectRepository
 from ..repositories.project_repository import _notifications_from_row
-from ..schemas import ProjectNotificationsSchema, StatusCreateRequest
+from ..schemas import ProjectNotificationsSchema, ProjectUpdateRequest, StatusCreateRequest
 from .notifier import Notifier, build_targets, notifier as default_notifier
 
 logger = logging.getLogger(__name__)
@@ -42,16 +42,57 @@ class ProjectService:
         self,
         session: Session,
         name: str,
+        timeout_seconds: float | None = None,
+        retention_days: int | None = None,
         notifications: ProjectNotificationsSchema | None = None,
     ) -> Project:
         """Создать новый проект и сгенерировать уникальную ссылку."""
 
         repo = ProjectRepository(session)
         now = datetime.now(timezone.utc)
-        project = repo.create_project(name, now=now, notifications=_to_notifications(notifications))
+        project = repo.create_project(
+            name,
+            now=now,
+            timeout_seconds=timeout_seconds,
+            retention_days=retention_days,
+            notifications=_to_notifications(notifications),
+        )
         session.commit()
         logger.info("Создан проект %s с токеном %s", project.id, project.token)
         return project
+
+    def update_project(
+        self,
+        session: Session,
+        token: str,
+        payload: ProjectUpdateRequest,
+    ) -> Project:
+        """Обновить основные настройки проекта."""
+
+        repo = ProjectRepository(session)
+        project = repo.update_project(
+            token,
+            name=payload.name,
+            enabled=payload.enabled,
+            timeout_seconds=payload.timeout_seconds,
+            retention_days=payload.retention_days,
+            update_timeout="timeout_seconds" in payload.model_fields_set,
+            update_retention="retention_days" in payload.model_fields_set,
+        )
+        if project is None:
+            raise HTTPException(status_code=404, detail="Проект не найден")
+        session.commit()
+        logger.info("Обновлены настройки проекта %s", project.id)
+        return project
+
+    def delete_project(self, session: Session, token: str) -> None:
+        """Удалить проект вместе с историей статусов."""
+
+        repo = ProjectRepository(session)
+        if not repo.delete_project(token):
+            raise HTTPException(status_code=404, detail="Проект не найден")
+        session.commit()
+        logger.info("Удалён проект с токеном %s", token)
 
     def update_notifications(
         self,
@@ -86,15 +127,18 @@ class ProjectService:
         if project_row is None:
             logger.warning("Запрос с неизвестным токеном %s", token)
             raise HTTPException(status_code=404, detail="Проект не найден")
+        if not project_row.enabled:
+            logger.info("Heartbeat отклонён для отключённого проекта %s", project_row.id)
+            raise HTTPException(status_code=403, detail="Проект отключён")
 
         timestamp = _to_utc(payload.timestamp or datetime.now(timezone.utc))
-        last_status = repo.get_last_status(project_row.id)
-        if last_status is not None and timestamp <= _to_utc(last_status.timestamp):
+        has_previous_status = project_row.last_message is not None
+        if has_previous_status and timestamp <= _to_utc(project_row.last_seen):
             logger.error(
                 "Получен статус с прошедшим временем от проекта %s: %s <= %s",
                 project_row.id,
                 timestamp,
-                last_status.timestamp,
+                project_row.last_seen,
             )
             raise HTTPException(status_code=400, detail="Время статуса должно увеличиваться")
 
@@ -151,6 +195,25 @@ class ProjectService:
 
         return ProjectRepository(session).list_projects()
 
+    def send_test_notification(self, session: Session, token: str) -> None:
+        """Отправить тестовый алерт по каналам проекта."""
+
+        repo = ProjectRepository(session)
+        project = repo.get_project(token)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Проект не найден")
+
+        self._notifier.notify_problem(
+            f"Тестовый алерт проекта «{project.name}»",
+            {
+                "project": str(project.id),
+                "message": "Проверка настроек уведомлений MishPulse",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+            build_targets(project.notifications),
+            priority="high",
+        )
+
     def mark_dead_projects(
         self,
         session: Session | None = None,
@@ -159,16 +222,20 @@ class ProjectService:
         """Пометить проекты без пульса как «мёртвые» и уведомить о них."""
 
         timeout = dead_after_seconds if dead_after_seconds is not None else settings.dead_after_seconds
-        threshold = datetime.now(timezone.utc) - timedelta(seconds=timeout)
         own_session = session is None
         from ..db.session import SessionLocal
 
         db = session or SessionLocal()
         try:
             repo = ProjectRepository(db)
-            newly_dead = repo.mark_dead_before(threshold)
-            for project in newly_dead:
-                logger.warning("Проект %s помечен как мёртвый", project.id)
+            newly_dead: list[Project] = []
+            now = datetime.now(timezone.utc)
+            for candidate in repo.list_watchdog_candidates():
+                project_timeout = candidate.timeout_seconds or timeout
+                if _to_utc(candidate.last_seen) < now - timedelta(seconds=project_timeout):
+                    project = repo.mark_dead(candidate)
+                    newly_dead.append(project)
+                    logger.warning("Проект %s помечен как мёртвый", project.id)
             db.commit()
         except Exception:
             db.rollback()
@@ -188,6 +255,38 @@ class ProjectService:
                 priority="urgent",
             )
         return newly_dead
+
+    def cleanup_old_statuses(self, session: Session | None = None) -> int:
+        """Удалить историю статусов старше retention-настроек проектов."""
+
+        own_session = session is None
+        from ..db.session import SessionLocal
+
+        db = session or SessionLocal()
+        deleted = 0
+        try:
+            repo = ProjectRepository(db)
+            now = datetime.now(timezone.utc)
+            for project in repo.list_projects():
+                retention_days = (
+                    project.retention_days
+                    if project.retention_days is not None
+                    else settings.status_retention_days
+                )
+                if retention_days <= 0:
+                    continue
+                cutoff = now - timedelta(days=retention_days)
+                deleted += repo.prune_statuses_before(project.id, cutoff)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            if own_session:
+                db.close()
+        if deleted:
+            logger.info("Удалено старых статусов: %s", deleted)
+        return deleted
 
     def set_last_seen(self, session: Session, token: str, last_seen: datetime) -> None:
         """Обновить время последнего пульса (используется в тестах)."""

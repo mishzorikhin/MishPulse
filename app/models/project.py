@@ -48,6 +48,15 @@ class Project(BaseModel):
     health: ProjectHealth = Field(
         default=ProjectHealth.ALIVE, description="Текущее состояние проекта"
     )
+    enabled: bool = Field(default=True, description="Включён ли мониторинг проекта")
+    timeout_seconds: float | None = Field(
+        default=None,
+        description="Индивидуальный timeout молчания; если не задан, используется глобальный",
+    )
+    retention_days: int | None = Field(
+        default=None,
+        description="Сколько дней хранить историю статусов; если не задано, глобальная настройка",
+    )
     last_message: str | None = Field(default=None, description="Текст последнего статуса")
     notifications: ProjectNotifications = Field(
         default_factory=ProjectNotifications,

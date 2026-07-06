@@ -2,10 +2,12 @@
 
 from .auth import AuthLoginRequest, AuthStatusResponse
 from .project import (
+    MaintenanceCleanupResponse,
     ProjectCreateRequest,
     ProjectNotificationsSchema,
     ProjectResponse,
     ProjectStateResponse,
+    ProjectUpdateRequest,
     StatusCreateRequest,
     StatusResponse,
 )
@@ -13,10 +15,12 @@ from .project import (
 __all__ = [
     "AuthLoginRequest",
     "AuthStatusResponse",
+    "MaintenanceCleanupResponse",
     "ProjectCreateRequest",
     "ProjectNotificationsSchema",
     "ProjectResponse",
     "ProjectStateResponse",
+    "ProjectUpdateRequest",
     "StatusCreateRequest",
     "StatusResponse",
 ]
