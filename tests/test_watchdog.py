@@ -20,15 +20,15 @@ def test_silent_project_becomes_dead(service, db_session, recording_notifier) ->
 
     assert [p.id for p in newly_dead] == [project.id]
     assert service.get_health(db_session, project.token) is ProjectHealth.DEAD
-    assert len(recording_notifier.notifications) == 1
-    assert "не отвечает" in recording_notifier.notifications[0][0]
+    assert len(recording_notifier.problems) == 1
+    assert "не отвечает" in recording_notifier.problems[0][0]
 
 
 def test_fresh_project_stays_alive(service, db_session, recording_notifier) -> None:
     service.create_project(db_session, "fresh")
 
     assert service.mark_dead_projects(db_session, dead_after_seconds=300) == []
-    assert recording_notifier.notifications == []
+    assert recording_notifier.problems == []
 
 
 def test_dead_project_is_not_reported_twice(service, db_session, recording_notifier) -> None:
@@ -41,7 +41,7 @@ def test_dead_project_is_not_reported_twice(service, db_session, recording_notif
 
     assert len(service.mark_dead_projects(db_session, dead_after_seconds=300)) == 1
     assert service.mark_dead_projects(db_session, dead_after_seconds=300) == []
-    assert len(recording_notifier.notifications) == 1
+    assert len(recording_notifier.problems) == 1
 
 
 def test_heartbeat_revives_dead_project(service, db_session, recording_notifier) -> None:
@@ -57,5 +57,7 @@ def test_heartbeat_revives_dead_project(service, db_session, recording_notifier)
     service.add_status(db_session, project.token, StatusCreateRequest(message="я вернулся"))
 
     assert service.get_health(db_session, project.token) is ProjectHealth.ALIVE
-    titles = [title for title, _ in recording_notifier.notifications]
-    assert any("снова на связи" in title for title in titles)
+    titles = [title for title, _, _, _ in recording_notifier.problems]
+    recoveries = [title for title, _, _ in recording_notifier.recoveries]
+    assert any("не отвечает" in title for title in titles)
+    assert any("снова на связи" in title for title in recoveries)

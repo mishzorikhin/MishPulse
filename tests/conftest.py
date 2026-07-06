@@ -16,6 +16,7 @@ from sqlalchemy.pool import StaticPool
 from app.api.routes import get_project_service
 from app.db import Base, get_db
 from app.main import app
+from app.services.notifier import NotificationTargets
 from app.services.project_service import ProjectService
 
 
@@ -23,10 +24,26 @@ class RecordingNotifier:
     """Заглушка Notifier, которая запоминает отправленные уведомления."""
 
     def __init__(self) -> None:
-        self.notifications: list[tuple[str, dict[str, str]]] = []
+        self.problems: list[tuple[str, dict[str, str], NotificationTargets, str]] = []
+        self.recoveries: list[tuple[str, dict[str, str], NotificationTargets]] = []
 
-    def notify(self, title: str, details: dict[str, str]) -> None:
-        self.notifications.append((title, details))
+    def notify_problem(
+        self,
+        title: str,
+        details: dict[str, str],
+        targets: NotificationTargets,
+        *,
+        priority: str = "urgent",
+    ) -> None:
+        self.problems.append((title, details, targets, priority))
+
+    def notify_recovery(
+        self,
+        title: str,
+        details: dict[str, str],
+        targets: NotificationTargets,
+    ) -> None:
+        self.recoveries.append((title, details, targets))
 
 
 @pytest.fixture()

@@ -77,8 +77,8 @@ def test_error_status_triggers_notification(client, recording_notifier) -> None:
     response = client.post(link, json={"level": "error", "message": "boom"})
     assert response.status_code == 200
 
-    assert len(recording_notifier.notifications) == 1
-    title, details = recording_notifier.notifications[0]
+    assert len(recording_notifier.problems) == 1
+    title, details, _, _ = recording_notifier.problems[0]
     assert "worker" in title
     assert details["message"] == "boom"
 
