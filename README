@@ -4,123 +4,103 @@ MishPulse — система мониторинга по принципу «пу
 
 🎯 Цель
 
-Создать self-hosted сервис, который:
+Self-hosted сервис, который:
 
-Принимает сигналы от приложений («я жив» или «ошибка»).
+- Принимает статусы от приложений («я жив», «предупреждение», «ошибка»).
+- Определяет, какие приложения «молчат» дольше заданного времени (watchdog).
+- Уведомляет о недоступности или ошибках (лог + webhook).
+- Показывает состояние всех проектов на минимальном HTML-дашборде.
 
-Определяет, какие приложения «молчат» дольше заданного времени.
+🚀 Быстрый старт
 
-Уведомляет (через Telegram / Email / Webhook) о недоступности или ошибках.
+    pip install -r requirements.txt
+    uvicorn app.main:app --reload
 
-⚙️ Архитектура
-Компоненты:
+Или через Docker:
 
-Collector API (FastAPI)
-Принимает POST-запросы от monitored-сервисов.
-Каждому приложению назначается уникальный token или id.
+    docker build -t mishpulse .
+    docker run -p 8000:8000 mishpulse
 
-Scheduler / Watchdog
-Периодически (каждые X секунд) проверяет время последнего «пульса».
-Если задержка больше timeout, считает сервис «погибшим».
+Интерактивная документация API: http://localhost:8000/docs
+Дашборд: http://localhost:8000/dashboard
 
-Notifier
-Отправляет уведомления (Telegram / Email / Webhook) при:
+⚙️ Настройки (переменные окружения)
 
-Потере пульса
+- MISHPULSE_DEAD_AFTER_SECONDS — через сколько секунд молчания проект считается
+  «мёртвым» (по умолчанию 300).
+- MISHPULSE_WATCHDOG_INTERVAL_SECONDS — как часто watchdog проверяет пульс
+  (по умолчанию 30).
+- MISHPULSE_WEBHOOK_URL — если задан, уведомления дополнительно отправляются
+  POST-запросом с JSON на этот URL.
 
-Сообщении об ошибке от клиента
+🧩 API
 
-Web UI (опционально)
-Минимальная страница с состоянием сервисов:
+POST /projects
+    Создать проект. Тело: {"name": "my-service"}.
+    Ответ: {"id": "...", "name": "my-service", "link": "/projects/<token>/statuses"}.
 
-🟢 жив
+POST /projects/{token}/statuses
+    Отправить статус. Тело:
+    {"level": "ok" | "warning" | "error", "message": "текст", "timestamp": "ISO-8601 (опционально)"}
+    При level="error" создаётся уведомление. Неизвестный токен — 404.
+    Время каждого следующего статуса должно быть больше предыдущего, иначе — 400.
 
-🟠 ошибка
+GET /projects/{token}/statuses
+    История статусов проекта.
 
-🔴 не отвечает
+GET /projects/summary
+    Состояние всех проектов:
+    [{"id": "...", "name": "svc", "health": "alive", "last_seen": "...", "last_message": "..."}]
 
-Хранилище
-Простая база данных (SQLite, Postgres или Redis).
-Таблица heartbeats:
+GET /dashboard
+    HTML-страница со статусами: 🟢 alive, 🟠 warning/error, 🔴 dead.
 
-id | service_name | last_seen | status | message
-
-🧩 API спецификация
-POST /api/heartbeat/<token>
-
-Сообщение от клиента:
-
-{
-  "status": "ok",       // ok | warning | error
-  "message": "optional human-readable text"
-}
-
-
-Ответ:
-
-{"result": "ok"}
-
-
-При status="ok" обновляется last_seen и status="alive".
-
-При status="error" — обновляется last_seen, status="error", создаётся уведомление.
-
-Если токен неизвестен — 403.
-
-GET /api/status
-
-Возвращает состояние всех сервисов:
-
-[
-  {"name": "service-a", "status": "alive", "last_seen": "2025-10-16T12:00:00Z"},
-  {"name": "service-b", "status": "dead", "last_seen": "2025-10-16T11:40:00Z"}
-]
+GET /health
+    Проверка живости самого сервиса.
 
 🧠 Логика проверки (Watchdog)
 
-Каждые N секунд:
-
-Для каждого сервиса вычислить now - last_seen.
-
-Если > timeout (например, 5 минут) → status = "dead", уведомить.
-
-Если status="error" → уведомить, но не считать мёртвым.
+Фоновая задача каждые N секунд проверяет now - last_seen каждого проекта.
+Если молчание дольше MISHPULSE_DEAD_AFTER_SECONDS — проект помечается как
+dead и создаётся уведомление (однократно). Когда «мёртвый» проект снова
+присылает статус, он оживает и отправляется уведомление о восстановлении.
 
 📬 Уведомления
 
-Telegram Bot (через токен и chat_id).
+Сейчас поддерживаются: лог приложения и webhook (POST с JSON вида
+{"title": "...", "project": "...", ...}). Telegram и Email — в планах.
 
-Email (через SMTP).
+🧪 Тесты
 
-Webhook (POST с JSON).
-
-Пример уведомления:
-
-❌ Service api-worker не отвечает более 5 минут.
-Последний сигнал: 12:03 UTC
+    pip install -r requirements-dev.txt
+    pytest
 
 🐍 Технологический стек
 
-Backend: Python 3.11+, FastAPI
-
-Scheduler: APScheduler или встроенный asyncio task
-
-DB: SQLite (по умолчанию), возможно Redis
-
-Notif: aiogram / aiosmtplib / requests
-
-Deploy: Docker / systemd
+- Backend: Python 3.11+, FastAPI
+- Watchdog: asyncio-задача внутри lifespan приложения
+- Хранилище: in-memory (данные теряются при перезапуске); SQLite/Postgres — в планах
+- Deploy: Docker / systemd
 
 🚀 Пример клиента
-import requests, time
 
-TOKEN = "abc123"
-URL = "https://monitor.yourdomain/api/heartbeat/" + TOKEN
+    import requests, time
 
-while True:
-    try:
-        # some app logic
-        requests.post(URL, json={"status": "ok"})
-    except Exception as e:
-        requests.post(URL, json={"status": "error", "message": str(e)})
-    time.sleep(60)
+    BASE = "http://localhost:8000"
+    link = requests.post(BASE + "/projects", json={"name": "my-app"}).json()["link"]
+    URL = BASE + link
+
+    while True:
+        try:
+            # some app logic
+            requests.post(URL, json={"level": "ok", "message": "alive"})
+        except Exception as e:
+            requests.post(URL, json={"level": "error", "message": str(e)})
+        time.sleep(60)
+
+🗺️ Что дальше
+
+- Персистентное хранилище (SQLite) вместо in-memory.
+- Уведомления в Telegram и Email.
+- Аутентификация для управляющих эндпоинтов (создание проектов, сводка).
+- Настраиваемый таймаут «смерти» на уровне отдельного проекта.
