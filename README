@@ -4,123 +4,180 @@ MishPulse — система мониторинга по принципу «пу
 
 🎯 Цель
 
-Создать self-hosted сервис, который:
+Self-hosted сервис, который:
 
-Принимает сигналы от приложений («я жив» или «ошибка»).
+- Принимает статусы от приложений («я жив», «предупреждение», «ошибка»).
+- Определяет, какие приложения «молчат» дольше заданного времени (watchdog).
+- Уведомляет о недоступности или ошибках (ntfy, Telegram, webhook, лог).
+- Показывает состояние всех проектов на минимальном HTML-дашборде.
 
-Определяет, какие приложения «молчат» дольше заданного времени.
+🚀 Быстрый старт
 
-Уведомляет (через Telegram / Email / Webhook) о недоступности или ошибках.
+Локально (SQLite, файл `mishpulse.db`):
 
-⚙️ Архитектура
-Компоненты:
+    pip install -r requirements.txt
+    alembic upgrade head
+    uvicorn app.main:app --reload
 
-Collector API (FastAPI)
-Принимает POST-запросы от monitored-сервисов.
-Каждому приложению назначается уникальный token или id.
+Docker Compose (приложение + лёгкий PostgreSQL на Alpine):
 
-Scheduler / Watchdog
-Периодически (каждые X секунд) проверяет время последнего «пульса».
-Если задержка больше timeout, считает сервис «погибшим».
+    docker compose up --build
 
-Notifier
-Отправляет уведомления (Telegram / Email / Webhook) при:
+Образ БД — `ghcr.io/oorabona/postgres:17-alpine`: минимальный PostgreSQL без
+лишних расширений (десятки МБ вместо сотен у стандартного `postgres:latest`).
 
-Потере пульса
+Только приложение (SQLite внутри контейнера):
 
-Сообщении об ошибке от клиента
+    docker build -t mishpulse .
+    docker run -p 8000:8000 mishpulse
 
-Web UI (опционально)
-Минимальная страница с состоянием сервисов:
+Интерактивная документация API: http://localhost:8000/docs
+Веб-интерфейс управления: http://localhost:8000/ui
+(старый /dashboard перенаправляет на /ui)
 
-🟢 жив
+⚙️ Настройки (переменные окружения)
 
-🟠 ошибка
+- MISHPULSE_DATABASE_URL — строка подключения SQLAlchemy
+  (по умолчанию `sqlite:///./mishpulse.db`; в compose —
+  `postgresql+psycopg2://mishpulse:mishpulse@db:5432/mishpulse`).
+- MISHPULSE_DEAD_AFTER_SECONDS — через сколько секунд молчания проект считается
+  «мёртвым» (по умолчанию 300).
+- MISHPULSE_STATUS_RETENTION_DAYS — сколько дней хранить историю статусов
+  по умолчанию (по умолчанию 30; у проекта можно переопределить, 0 отключает очистку).
+- MISHPULSE_WATCHDOG_INTERVAL_SECONDS — как часто watchdog проверяет пульс
+  (по умолчанию 30).
+- MISHPULSE_WEBHOOK_URL — если задан, уведомления дополнительно отправляются
+  POST-запросом с JSON на этот URL.
+- MISHPULSE_NTFY_SERVER — базовый URL ntfy-сервера по умолчанию
+  (по умолчанию `https://ntfy.sh`).
+- MISHPULSE_TELEGRAM_BOT_TOKEN — токен Telegram-бота по умолчанию для проектов,
+  у которых не задан свой токен.
+- MISHPULSE_ADMIN_PASSWORD — пароль для веб-интерфейса и управляющих API.
+  Если не задан, авторизация отключена (удобно для локальной разработки).
+  Heartbeat (`POST /projects/{token}/statuses`) всегда доступен без пароля.
 
-🔴 не отвечает
+🗄️ База данных и миграции
 
-Хранилище
-Простая база данных (SQLite, Postgres или Redis).
-Таблица heartbeats:
+- ORM: SQLAlchemy 2.0, миграции: Alembic.
+- Таблицы: `projects` (состояние и агрегаты), `statuses` (история пульсов).
+- Применить миграции: `alembic upgrade head`
+- Создать новую миграцию после изменения моделей: `alembic revision --autogenerate -m "описание"`
 
-id | service_name | last_seen | status | message
+🧩 API
 
-🧩 API спецификация
-POST /api/heartbeat/<token>
+Авторизация (если задан `MISHPULSE_ADMIN_PASSWORD`):
+    Заголовок `Authorization: Bearer <пароль>` для управляющих эндпоинтов.
+    `POST /projects/{token}/statuses` (heartbeat) — без пароля.
 
-Сообщение от клиента:
+POST /projects
+    Создать проект. Тело:
+    {
+      "name": "my-service",
+      "timeout_seconds": 300,
+      "retention_days": 30,
+      "notifications": {
+        "ntfy_topic": "my-service-alerts",
+        "ntfy_server": "https://ntfy.sh",
+        "telegram_chat_id": "123456789",
+        "telegram_bot_token": "123:ABC"
+      }
+    }
+    Поля notifications опциональны. telegram_bot_token и ntfy_server можно не
+    указывать — возьмутся глобальные MISHPULSE_* значения.
+    Ответ: {"id": "...", "name": "...", "link": "...", "notifications": {...}}.
 
-{
-  "status": "ok",       // ok | warning | error
-  "message": "optional human-readable text"
-}
+PATCH /projects/{token}
+    Обновить проект: name, enabled, timeout_seconds, retention_days.
+    enabled=false отключает мониторинг и отклоняет новые heartbeat с 403.
 
+DELETE /projects/{token}
+    Удалить проект и всю историю статусов.
 
-Ответ:
+PATCH /projects/{token}/notifications
+    Обновить настройки ntfy/Telegram для проекта.
 
-{"result": "ok"}
+GET /projects/{token}/notifications
+    Прочитать текущие настройки уведомлений проекта.
 
+POST /projects/{token}/test-notification
+    Отправить тестовый алерт в настроенные каналы проекта.
 
-При status="ok" обновляется last_seen и status="alive".
+POST /projects/{token}/statuses
+    Отправить статус. Тело:
+    {"level": "ok" | "warning" | "error", "message": "текст", "timestamp": "ISO-8601 (опционально)"}
+    При level="error" создаётся уведомление. Неизвестный токен — 404.
+    Время каждого следующего статуса должно быть больше предыдущего, иначе — 400.
 
-При status="error" — обновляется last_seen, status="error", создаётся уведомление.
+GET /projects/{token}/statuses
+    История статусов проекта.
 
-Если токен неизвестен — 403.
+GET /projects/summary
+    Состояние всех проектов:
+    [{"id": "...", "name": "svc", "enabled": true, "health": "alive", "timeout_seconds": 300, "last_seen": "..."}]
 
-GET /api/status
+POST /maintenance/cleanup-statuses
+    Запустить ручную очистку старой истории статусов по retention-настройкам.
 
-Возвращает состояние всех сервисов:
+GET /dashboard
+    Перенаправление на /ui (веб-интерфейс управления).
 
-[
-  {"name": "service-a", "status": "alive", "last_seen": "2025-10-16T12:00:00Z"},
-  {"name": "service-b", "status": "dead", "last_seen": "2025-10-16T11:40:00Z"}
-]
+GET /ui
+    SPA: список проектов, создание, редактирование, включение/выключение,
+    удаление, настройка уведомлений, тест уведомлений, история статусов.
+
+GET /health
+    Проверка живости самого сервиса.
 
 🧠 Логика проверки (Watchdog)
 
-Каждые N секунд:
-
-Для каждого сервиса вычислить now - last_seen.
-
-Если > timeout (например, 5 минут) → status = "dead", уведомить.
-
-Если status="error" → уведомить, но не считать мёртвым.
+Фоновая задача каждые N секунд проверяет now - last_seen каждого включённого
+проекта. Если молчание дольше timeout проекта (или MISHPULSE_DEAD_AFTER_SECONDS)
+— проект помечается как dead и создаётся уведомление (однократно). Когда
+«мёртвый» проект снова присылает статус, он оживает и отправляется уведомление
+о восстановлении. В этом же цикле применяется retention cleanup истории.
 
 📬 Уведомления
 
-Telegram Bot (через токен и chat_id).
+При проблемах (status=error/warning, проект помечен как dead) MishPulse шлёт алерты:
 
-Email (через SMTP).
+- **ntfy** — POST в `{ntfy_server}/{ntfy_topic}` с заголовками Title, Priority, Tags.
+- **Telegram** — через Bot API в указанный chat_id.
+- **Webhook** — глобальный POST с JSON (если задан MISHPULSE_WEBHOOK_URL).
 
-Webhook (POST с JSON).
+Каналы настраиваются **для каждого проекта** при создании или через
+`PATCH /projects/{token}/notifications`. Сообщение о восстановлении после dead
+идёт только в лог и webhook, без ntfy/Telegram.
 
-Пример уведомления:
+🧪 Тесты
 
-❌ Service api-worker не отвечает более 5 минут.
-Последний сигнал: 12:03 UTC
+    pip install -r requirements-dev.txt
+    pytest
 
 🐍 Технологический стек
 
-Backend: Python 3.11+, FastAPI
-
-Scheduler: APScheduler или встроенный asyncio task
-
-DB: SQLite (по умолчанию), возможно Redis
-
-Notif: aiogram / aiosmtplib / requests
-
-Deploy: Docker / systemd
+- Backend: Python 3.11+, FastAPI
+- Watchdog: asyncio-задача внутри lifespan приложения
+- Хранилище: SQLite (по умолчанию) или PostgreSQL (docker-compose)
+- ORM / миграции: SQLAlchemy + Alembic
+- Deploy: Docker / docker-compose / systemd
 
 🚀 Пример клиента
-import requests, time
 
-TOKEN = "abc123"
-URL = "https://monitor.yourdomain/api/heartbeat/" + TOKEN
+    import requests, time
 
-while True:
-    try:
-        # some app logic
-        requests.post(URL, json={"status": "ok"})
-    except Exception as e:
-        requests.post(URL, json={"status": "error", "message": str(e)})
-    time.sleep(60)
+    BASE = "http://localhost:8000"
+    link = requests.post(BASE + "/projects", json={"name": "my-app"}).json()["link"]
+    URL = BASE + link
+
+    while True:
+        try:
+            # some app logic
+            requests.post(URL, json={"level": "ok", "message": "alive"})
+        except Exception as e:
+            requests.post(URL, json={"level": "error", "message": str(e)})
+        time.sleep(60)
+
+🗺️ Что дальше
+
+- Уведомления по Email.
+- Настраиваемый таймаут «смерти» на уровне отдельного проекта.

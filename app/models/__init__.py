@@ -1,5 +1,6 @@
 """Экспорт моделей данных приложения."""
 
-from .project import Project, Status
+from .notifications import ProjectNotifications
+from .project import Project, ProjectHealth, Status, StatusLevel
 
-__all__ = ["Project", "Status"]
+__all__ = ["Project", "ProjectHealth", "ProjectNotifications", "Status", "StatusLevel"]

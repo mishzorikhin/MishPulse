@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
 from fastapi import FastAPI
 
 from .api import register_routes
+from .services import Watchdog, project_service
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,12 +18,20 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="MishPulse", version="0.1.0")
-register_routes(app)
 
-
-@app.on_event("startup")
-async def log_startup_message() -> None:
-    """Log a startup message once the application is ready."""
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Запустить watchdog на время жизни приложения."""
 
     logger.info("Инициализация приложения MishPulse")
+    watchdog = Watchdog(project_service)
+    watchdog.start()
+    try:
+        yield
+    finally:
+        await watchdog.stop()
+        logger.info("Приложение MishPulse остановлено")
+
+
+app = FastAPI(title="MishPulse", version="0.2.0", lifespan=lifespan)
+register_routes(app)
