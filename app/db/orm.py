@@ -24,6 +24,10 @@ class ProjectORM(Base):
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     health: Mapped[str] = mapped_column(String(20), nullable=False, default="alive")
     last_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ntfy_server: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ntfy_topic: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    telegram_bot_token: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     statuses: Mapped[List["StatusORM"]] = relationship(
         back_populates="project",

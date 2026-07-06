@@ -8,8 +8,26 @@ from uuid import UUID, uuid4
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from ..models import Project, ProjectHealth, Status, StatusLevel
+from ..models import Project, ProjectHealth, ProjectNotifications, Status, StatusLevel
 from ..db.orm import ProjectORM, StatusORM
+
+
+def _notifications_from_row(project: ProjectORM) -> ProjectNotifications:
+    return ProjectNotifications(
+        ntfy_server=project.ntfy_server,
+        ntfy_topic=project.ntfy_topic,
+        telegram_bot_token=project.telegram_bot_token,
+        telegram_chat_id=project.telegram_chat_id,
+    )
+
+
+def _apply_notifications(row: ProjectORM, notifications: ProjectNotifications | None) -> None:
+    if notifications is None:
+        return
+    row.ntfy_server = notifications.ntfy_server
+    row.ntfy_topic = notifications.ntfy_topic
+    row.telegram_bot_token = notifications.telegram_bot_token
+    row.telegram_chat_id = notifications.telegram_chat_id
 
 
 def _to_domain(project: ProjectORM, statuses: list[StatusORM] | None = None) -> Project:
@@ -23,6 +41,7 @@ def _to_domain(project: ProjectORM, statuses: list[StatusORM] | None = None) -> 
         last_seen=project.last_seen,
         health=ProjectHealth(project.health),
         last_message=project.last_message,
+        notifications=_notifications_from_row(project),
         statuses=[
             Status(level=StatusLevel(row.level), message=row.message, timestamp=row.timestamp)
             for row in (statuses if statuses is not None else project.statuses)
@@ -36,7 +55,13 @@ class ProjectRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create_project(self, name: str, *, now: datetime) -> Project:
+    def create_project(
+        self,
+        name: str,
+        *,
+        now: datetime,
+        notifications: ProjectNotifications | None = None,
+    ) -> Project:
         """Создать проект с уникальным токеном."""
 
         row = ProjectORM(
@@ -47,6 +72,7 @@ class ProjectRepository:
             last_seen=now,
             health=ProjectHealth.ALIVE.value,
         )
+        _apply_notifications(row, notifications)
         self._session.add(row)
         self._session.flush()
         return _to_domain(row, statuses=[])
@@ -57,6 +83,18 @@ class ProjectRepository:
     def get_project(self, token: str) -> Project | None:
         row = self.get_by_token(token)
         return _to_domain(row) if row else None
+
+    def update_notifications(
+        self,
+        token: str,
+        notifications: ProjectNotifications,
+    ) -> Project | None:
+        row = self.get_by_token(token)
+        if row is None:
+            return None
+        _apply_notifications(row, notifications)
+        self._session.flush()
+        return _to_domain(row, statuses=[])
 
     def list_projects(self) -> list[Project]:
         rows = self._session.scalars(select(ProjectORM).order_by(ProjectORM.created_at)).all()

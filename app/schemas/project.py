@@ -10,10 +10,39 @@ from pydantic import BaseModel, Field
 from ..models import ProjectHealth, StatusLevel
 
 
+class ProjectNotificationsSchema(BaseModel):
+    """Настройки уведомлений проекта через ntfy и Telegram."""
+
+    ntfy_server: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Базовый URL ntfy-сервера",
+    )
+    ntfy_topic: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Топик ntfy для алертов",
+    )
+    telegram_bot_token: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Токен Telegram-бота",
+    )
+    telegram_chat_id: str | None = Field(
+        default=None,
+        max_length=100,
+        description="Chat ID для уведомлений",
+    )
+
+
 class ProjectCreateRequest(BaseModel):
     """Запрос на создание проекта."""
 
     name: str = Field(..., min_length=1, max_length=200, description="Название проекта")
+    notifications: ProjectNotificationsSchema | None = Field(
+        default=None,
+        description="Настройки ntfy/Telegram для алертов о проблемах",
+    )
 
 
 class ProjectResponse(BaseModel):
@@ -22,6 +51,9 @@ class ProjectResponse(BaseModel):
     id: UUID = Field(..., description="Уникальный идентификатор проекта")
     name: str = Field(..., description="Название проекта")
     link: str = Field(..., description="Уникальная ссылка для отправки статусов")
+    notifications: ProjectNotificationsSchema = Field(
+        ..., description="Настроенные каналы уведомлений"
+    )
 
 
 class ProjectStateResponse(BaseModel):

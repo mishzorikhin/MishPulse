@@ -2,6 +2,7 @@
 
 from .project import (
     ProjectCreateRequest,
+    ProjectNotificationsSchema,
     ProjectResponse,
     ProjectStateResponse,
     StatusCreateRequest,
@@ -10,6 +11,7 @@ from .project import (
 
 __all__ = [
     "ProjectCreateRequest",
+    "ProjectNotificationsSchema",
     "ProjectResponse",
     "ProjectStateResponse",
     "StatusCreateRequest",

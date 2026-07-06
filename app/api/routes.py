@@ -10,6 +10,7 @@ from ..db import get_db
 from ..models import ProjectHealth
 from ..schemas import (
     ProjectCreateRequest,
+    ProjectNotificationsSchema,
     ProjectResponse,
     ProjectStateResponse,
     StatusCreateRequest,
@@ -60,9 +61,14 @@ async def create_project(
 ) -> ProjectResponse:
     """Создать новый проект и вернуть ссылку для отправки статусов."""
 
-    project = service.create_project(session, payload.name)
+    project = service.create_project(session, payload.name, payload.notifications)
     link = f"/projects/{project.token}/statuses"
-    return ProjectResponse(id=project.id, name=project.name, link=link)
+    return ProjectResponse(
+        id=project.id,
+        name=project.name,
+        link=link,
+        notifications=ProjectNotificationsSchema(**project.notifications.model_dump()),
+    )
 
 
 @router.get(
@@ -134,6 +140,39 @@ async def dashboard(
 </body>
 </html>"""
     return HTMLResponse(html)
+
+
+@router.get(
+    "/projects/{token}/notifications",
+    response_model=ProjectNotificationsSchema,
+    summary="Получить настройки уведомлений проекта",
+)
+async def get_notifications(
+    token: str,
+    session: Session = Depends(get_db),
+    service: ProjectService = Depends(get_project_service),
+) -> ProjectNotificationsSchema:
+    """Вернуть настройки ntfy и Telegram для проекта."""
+
+    notifications = service.get_notifications(session, token)
+    return ProjectNotificationsSchema(**notifications.model_dump())
+
+
+@router.patch(
+    "/projects/{token}/notifications",
+    response_model=ProjectNotificationsSchema,
+    summary="Обновить настройки уведомлений проекта",
+)
+async def update_notifications(
+    token: str,
+    payload: ProjectNotificationsSchema,
+    session: Session = Depends(get_db),
+    service: ProjectService = Depends(get_project_service),
+) -> ProjectNotificationsSchema:
+    """Настроить ntfy-топик и Telegram-бота для алертов о проблемах."""
+
+    project = service.update_notifications(session, token, payload)
+    return ProjectNotificationsSchema(**project.notifications.model_dump())
 
 
 @router.post(

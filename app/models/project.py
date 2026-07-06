@@ -9,6 +9,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from .notifications import ProjectNotifications
+
 
 class StatusLevel(str, Enum):
     """Уровень статуса, отправленного клиентом."""
@@ -47,4 +49,8 @@ class Project(BaseModel):
         default=ProjectHealth.ALIVE, description="Текущее состояние проекта"
     )
     last_message: str | None = Field(default=None, description="Текст последнего статуса")
+    notifications: ProjectNotifications = Field(
+        default_factory=ProjectNotifications,
+        description="Настройки уведомлений проекта",
+    )
     statuses: List[Status] = Field(default_factory=list, description="История статусов проекта")

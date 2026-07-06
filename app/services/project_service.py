@@ -9,10 +9,11 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..models import Project, Status, StatusLevel
+from ..models import Project, ProjectNotifications, Status, StatusLevel
 from ..repositories import ProjectRepository
-from ..schemas import StatusCreateRequest
-from .notifier import Notifier, notifier as default_notifier
+from ..repositories.project_repository import _notifications_from_row
+from ..schemas import ProjectNotificationsSchema, StatusCreateRequest
+from .notifier import Notifier, build_targets, notifier as default_notifier
 
 logger = logging.getLogger(__name__)
 
@@ -25,21 +26,57 @@ def _to_utc(moment: datetime) -> datetime:
     return moment.astimezone(timezone.utc)
 
 
+def _to_notifications(schema: ProjectNotificationsSchema | None) -> ProjectNotifications | None:
+    if schema is None:
+        return None
+    return ProjectNotifications(**schema.model_dump())
+
+
 class ProjectService:
     """Сервис для работы с проектами."""
 
     def __init__(self, notifier: Notifier | None = None) -> None:
         self._notifier = notifier or default_notifier
 
-    def create_project(self, session: Session, name: str) -> Project:
+    def create_project(
+        self,
+        session: Session,
+        name: str,
+        notifications: ProjectNotificationsSchema | None = None,
+    ) -> Project:
         """Создать новый проект и сгенерировать уникальную ссылку."""
 
         repo = ProjectRepository(session)
         now = datetime.now(timezone.utc)
-        project = repo.create_project(name, now=now)
+        project = repo.create_project(name, now=now, notifications=_to_notifications(notifications))
         session.commit()
         logger.info("Создан проект %s с токеном %s", project.id, project.token)
         return project
+
+    def update_notifications(
+        self,
+        session: Session,
+        token: str,
+        notifications: ProjectNotificationsSchema,
+    ) -> Project:
+        """Обновить настройки уведомлений проекта."""
+
+        repo = ProjectRepository(session)
+        project = repo.update_notifications(token, ProjectNotifications(**notifications.model_dump()))
+        if project is None:
+            raise HTTPException(status_code=404, detail="Проект не найден")
+        session.commit()
+        logger.info("Обновлены уведомления проекта %s", project.id)
+        return project
+
+    def get_notifications(self, session: Session, token: str) -> ProjectNotifications:
+        """Получить настройки уведомлений проекта."""
+
+        repo = ProjectRepository(session)
+        project = repo.get_project(token)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Проект не найден")
+        return project.notifications
 
     def add_status(self, session: Session, token: str, payload: StatusCreateRequest) -> Status:
         """Добавить новый статус проекту."""
@@ -67,22 +104,35 @@ class ProjectService:
         session.commit()
         logger.info("Добавлен статус для проекта %s (%s)", project_row.id, status.level.value)
 
+        targets = build_targets(_notifications_from_row(project_row))
+        details = {
+            "project": str(project_row.id),
+            "message": status.message,
+            "timestamp": status.timestamp.isoformat(),
+        }
+
         if status.level is StatusLevel.ERROR:
-            self._notifier.notify(
+            self._notifier.notify_problem(
                 f"Проект «{project_row.name}» сообщил об ошибке",
-                {
-                    "project": str(project_row.id),
-                    "message": status.message,
-                    "timestamp": status.timestamp.isoformat(),
-                },
+                details,
+                targets,
+                priority="urgent",
+            )
+        elif status.level is StatusLevel.WARNING:
+            self._notifier.notify_problem(
+                f"Проект «{project_row.name}» предупреждает",
+                details,
+                targets,
+                priority="high",
             )
         elif was_dead:
-            self._notifier.notify(
+            self._notifier.notify_recovery(
                 f"Проект «{project_row.name}» снова на связи",
                 {
                     "project": str(project_row.id),
                     "timestamp": status.timestamp.isoformat(),
                 },
+                targets,
             )
         return status
 
@@ -128,12 +178,14 @@ class ProjectService:
                 db.close()
 
         for project in newly_dead:
-            self._notifier.notify(
+            self._notifier.notify_problem(
                 f"Проект «{project.name}» не отвечает",
                 {
                     "project": str(project.id),
                     "last_seen": project.last_seen.isoformat(),
                 },
+                build_targets(project.notifications),
+                priority="urgent",
             )
         return newly_dead
 
