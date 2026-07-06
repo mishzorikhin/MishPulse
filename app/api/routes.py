@@ -13,6 +13,7 @@ from ..schemas import (
     StatusResponse,
 )
 from ..services import ProjectService, project_service
+from .auth import require_admin
 
 router = APIRouter(tags=["system"])
 
@@ -42,6 +43,7 @@ async def healthcheck() -> dict[str, str]:
     response_model=ProjectResponse,
     status_code=201,
     summary="Создать проект и получить ссылку для статусов",
+    dependencies=[Depends(require_admin)],
 )
 async def create_project(
     payload: ProjectCreateRequest,
@@ -64,6 +66,7 @@ async def create_project(
     "/projects/summary",
     response_model=list[ProjectStateResponse],
     summary="Сводка состояния всех проектов",
+    dependencies=[Depends(require_admin)],
 )
 async def projects_summary(
     session: Session = Depends(get_db),
@@ -88,6 +91,7 @@ async def projects_summary(
     "/projects/{token}/notifications",
     response_model=ProjectNotificationsSchema,
     summary="Получить настройки уведомлений проекта",
+    dependencies=[Depends(require_admin)],
 )
 async def get_notifications(
     token: str,
@@ -104,6 +108,7 @@ async def get_notifications(
     "/projects/{token}/notifications",
     response_model=ProjectNotificationsSchema,
     summary="Обновить настройки уведомлений проекта",
+    dependencies=[Depends(require_admin)],
 )
 async def update_notifications(
     token: str,
@@ -128,7 +133,7 @@ async def push_status(
     session: Session = Depends(get_db),
     service: ProjectService = Depends(get_project_service),
 ) -> StatusResponse:
-    """Принять статус по уникальной ссылке проекта."""
+    """Принять статус по уникальной ссылке проекта (без пароля администратора)."""
 
     status = service.add_status(session, token, payload)
     return StatusResponse(level=status.level, message=status.message, timestamp=status.timestamp)
@@ -138,6 +143,7 @@ async def push_status(
     "/projects/{token}/statuses",
     response_model=list[StatusResponse],
     summary="Получить историю статусов проекта",
+    dependencies=[Depends(require_admin)],
 )
 async def list_statuses(
     token: str,

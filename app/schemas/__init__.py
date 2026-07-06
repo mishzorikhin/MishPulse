@@ -1,5 +1,6 @@
 """Экспортируемые схемы запросов и ответов."""
 
+from .auth import AuthLoginRequest, AuthStatusResponse
 from .project import (
     ProjectCreateRequest,
     ProjectNotificationsSchema,
@@ -10,6 +11,8 @@ from .project import (
 )
 
 __all__ = [
+    "AuthLoginRequest",
+    "AuthStatusResponse",
     "ProjectCreateRequest",
     "ProjectNotificationsSchema",
     "ProjectResponse",

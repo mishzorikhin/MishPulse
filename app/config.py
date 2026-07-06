@@ -22,6 +22,8 @@ class Settings:
     telegram_bot_token: str | None = None
     # Строка подключения SQLAlchemy (SQLite по умолчанию, Postgres в docker-compose)
     database_url: str = "sqlite:///./mishpulse.db"
+    # Пароль администратора для UI и управляющих API (если не задан — авторизация отключена)
+    admin_password: str | None = None
 
 
 def load_settings() -> Settings:
@@ -39,6 +41,7 @@ def load_settings() -> Settings:
             "MISHPULSE_DATABASE_URL",
             "sqlite:///./mishpulse.db",
         ),
+        admin_password=os.getenv("MISHPULSE_ADMIN_PASSWORD") or None,
     )
 
 

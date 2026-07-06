@@ -27,6 +27,7 @@ services:
       MISHPULSE_WATCHDOG_INTERVAL_SECONDS: "30"
       # MISHPULSE_NTFY_SERVER: "https://ntfy.sh"
       # MISHPULSE_TELEGRAM_BOT_TOKEN: "123456:ABC-DEF"
+      MISHPULSE_ADMIN_PASSWORD: "changeme"
     depends_on:
       db:
         condition: service_healthy

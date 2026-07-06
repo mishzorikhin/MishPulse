@@ -15,11 +15,33 @@ const LEVEL_LABELS = {
   error: "Error",
 };
 
+const AUTH_STORAGE_KEY = "mishpulse_password";
+
+let authState = { required: false, authenticated: true };
+
+function authHeaders() {
+  const password = sessionStorage.getItem(AUTH_STORAGE_KEY);
+  if (!password) return {};
+  return { Authorization: `Bearer ${password}` };
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+      ...(options.headers || {}),
+    },
     ...options,
   });
+  if (response.status === 401) {
+    sessionStorage.removeItem(AUTH_STORAGE_KEY);
+    authState = { required: true, authenticated: false };
+    if (!location.hash.includes("/login")) {
+      location.hash = "#/login";
+    }
+    throw new Error("Требуется авторизация");
+  }
   if (!response.ok) {
     let detail = response.statusText;
     try {
@@ -311,12 +333,85 @@ async function pageProjectDetail(token) {
   });
 }
 
+function updateNavAuth() {
+  const logout = document.getElementById("logout-btn");
+  if (!logout) return;
+  logout.style.display = authState.required && authState.authenticated ? "inline-flex" : "none";
+}
+
+async function refreshAuthState() {
+  const response = await fetch("/auth/status", { headers: authHeaders() });
+  if (response.ok) {
+    authState = await response.json();
+  }
+  updateNavAuth();
+}
+
+async function pageLogin() {
+  setActiveNav("");
+  appEl.innerHTML = `
+    <div class="card" style="max-width:420px;margin:2rem auto;">
+      <h2>Вход</h2>
+      <p class="muted">Введите пароль администратора MishPulse.</p>
+      <form id="login-form">
+        <div class="form-group">
+          <label for="login-password">Пароль</label>
+          <input id="login-password" name="password" type="password" required autocomplete="current-password">
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" type="submit">Войти</button>
+        </div>
+      </form>
+      <div id="login-message"></div>
+    </div>`;
+
+  document.getElementById("login-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const messageEl = document.getElementById("login-message");
+    messageEl.innerHTML = "";
+    const password = String(new FormData(event.target).get("password") || "");
+    try {
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || "Неверный пароль");
+      }
+      sessionStorage.setItem(AUTH_STORAGE_KEY, password);
+      await refreshAuthState();
+      location.hash = "#/";
+    } catch (error) {
+      messageEl.innerHTML = `<div class="alert alert-error">${escapeHtml(error.message)}</div>`;
+    }
+  });
+}
+
 async function router() {
   const hash = location.hash.replace(/^#/, "") || "/";
-  const [path, query] = hash.split("?");
+  const [path] = hash.split("?");
   const segments = path.split("/").filter(Boolean);
 
   try {
+    await refreshAuthState();
+
+    if (path === "/login") {
+      if (!authState.required || authState.authenticated) {
+        location.hash = "#/";
+        return;
+      }
+      await pageLogin();
+      return;
+    }
+
+    if (authState.required && !authState.authenticated) {
+      location.hash = "#/login";
+      await pageLogin();
+      return;
+    }
+
     if (path === "/" || path === "") {
       await pageDashboard();
       return;
@@ -331,9 +426,17 @@ async function router() {
     }
     renderError(`Страница не найдена: ${path}`);
   } catch (error) {
-    renderError(error.message);
+    if (error.message !== "Требуется авторизация") {
+      renderError(error.message);
+    }
   }
 }
+
+document.getElementById("logout-btn")?.addEventListener("click", () => {
+  sessionStorage.removeItem(AUTH_STORAGE_KEY);
+  authState = { required: true, authenticated: false };
+  location.hash = "#/login";
+});
 
 window.addEventListener("hashchange", router);
 router();
