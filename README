@@ -13,10 +13,20 @@ Self-hosted сервис, который:
 
 🚀 Быстрый старт
 
+Локально (SQLite, файл `mishpulse.db`):
+
     pip install -r requirements.txt
+    alembic upgrade head
     uvicorn app.main:app --reload
 
-Или через Docker:
+Docker Compose (приложение + лёгкий PostgreSQL на Alpine):
+
+    docker compose up --build
+
+Образ БД — `ghcr.io/oorabona/postgres:17-alpine`: минимальный PostgreSQL без
+лишних расширений (десятки МБ вместо сотен у стандартного `postgres:latest`).
+
+Только приложение (SQLite внутри контейнера):
 
     docker build -t mishpulse .
     docker run -p 8000:8000 mishpulse
@@ -26,12 +36,22 @@ Self-hosted сервис, который:
 
 ⚙️ Настройки (переменные окружения)
 
+- MISHPULSE_DATABASE_URL — строка подключения SQLAlchemy
+  (по умолчанию `sqlite:///./mishpulse.db`; в compose —
+  `postgresql+psycopg2://mishpulse:mishpulse@db:5432/mishpulse`).
 - MISHPULSE_DEAD_AFTER_SECONDS — через сколько секунд молчания проект считается
   «мёртвым» (по умолчанию 300).
 - MISHPULSE_WATCHDOG_INTERVAL_SECONDS — как часто watchdog проверяет пульс
   (по умолчанию 30).
 - MISHPULSE_WEBHOOK_URL — если задан, уведомления дополнительно отправляются
   POST-запросом с JSON на этот URL.
+
+🗄️ База данных и миграции
+
+- ORM: SQLAlchemy 2.0, миграции: Alembic.
+- Таблицы: `projects` (состояние и агрегаты), `statuses` (история пульсов).
+- Применить миграции: `alembic upgrade head`
+- Создать новую миграцию после изменения моделей: `alembic revision --autogenerate -m "описание"`
 
 🧩 API
 
@@ -79,8 +99,9 @@ dead и создаётся уведомление (однократно). Ког
 
 - Backend: Python 3.11+, FastAPI
 - Watchdog: asyncio-задача внутри lifespan приложения
-- Хранилище: in-memory (данные теряются при перезапуске); SQLite/Postgres — в планах
-- Deploy: Docker / systemd
+- Хранилище: SQLite (по умолчанию) или PostgreSQL (docker-compose)
+- ORM / миграции: SQLAlchemy + Alembic
+- Deploy: Docker / docker-compose / systemd
 
 🚀 Пример клиента
 
@@ -100,7 +121,6 @@ dead и создаётся уведомление (однократно). Ког
 
 🗺️ Что дальше
 
-- Персистентное хранилище (SQLite) вместо in-memory.
 - Уведомления в Telegram и Email.
 - Аутентификация для управляющих эндпоинтов (создание проектов, сводка).
 - Настраиваемый таймаут «смерти» на уровне отдельного проекта.
