@@ -1,16 +1,28 @@
 """API router definitions for MishPulse service."""
 
-from fastapi import APIRouter, Depends
+from html import escape
 
+from fastapi import APIRouter, Depends
+from fastapi.responses import HTMLResponse
+
+from ..models import ProjectHealth
 from ..schemas import (
     ProjectCreateRequest,
     ProjectResponse,
+    ProjectStateResponse,
     StatusCreateRequest,
     StatusResponse,
 )
 from ..services import ProjectService, project_service
 
 router = APIRouter(tags=["system"])
+
+_HEALTH_ICONS = {
+    ProjectHealth.ALIVE: "🟢",
+    ProjectHealth.WARNING: "🟠",
+    ProjectHealth.ERROR: "🟠",
+    ProjectHealth.DEAD: "🔴",
+}
 
 
 def get_project_service() -> ProjectService:
@@ -36,6 +48,7 @@ async def healthcheck() -> dict[str, str]:
 @router.post(
     "/projects",
     response_model=ProjectResponse,
+    status_code=201,
     summary="Создать проект и получить ссылку для статусов",
 )
 async def create_project(
@@ -47,6 +60,76 @@ async def create_project(
     project = service.create_project(payload.name)
     link = f"/projects/{project.token}/statuses"
     return ProjectResponse(id=project.id, name=project.name, link=link)
+
+
+@router.get(
+    "/projects/summary",
+    response_model=list[ProjectStateResponse],
+    summary="Сводка состояния всех проектов",
+)
+async def projects_summary(
+    service: ProjectService = Depends(get_project_service),
+) -> list[ProjectStateResponse]:
+    """Вернуть текущее состояние всех проектов."""
+
+    return [
+        ProjectStateResponse(
+            id=project.id,
+            name=project.name,
+            health=project.health,
+            last_seen=project.last_seen,
+            last_message=project.statuses[-1].message if project.statuses else None,
+        )
+        for project in service.get_project_states()
+    ]
+
+
+@router.get(
+    "/dashboard",
+    response_class=HTMLResponse,
+    summary="Минимальный HTML-дашборд состояния проектов",
+)
+async def dashboard(
+    service: ProjectService = Depends(get_project_service),
+) -> HTMLResponse:
+    """Простая HTML-страница со статусами всех проектов."""
+
+    rows = []
+    for project in service.get_project_states():
+        icon = _HEALTH_ICONS[project.health]
+        last_message = project.statuses[-1].message if project.statuses else ""
+        rows.append(
+            "<tr>"
+            f"<td>{icon} {escape(project.name)}</td>"
+            f"<td>{escape(project.health.value)}</td>"
+            f"<td>{escape(project.last_seen.strftime('%Y-%m-%d %H:%M:%S %Z'))}</td>"
+            f"<td>{escape(last_message)}</td>"
+            "</tr>"
+        )
+    body = "".join(rows) or '<tr><td colspan="4">Проектов пока нет</td></tr>'
+    html = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="30">
+  <title>MishPulse — дашборд</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #f7f7f9; color: #222; }}
+    h1 {{ font-size: 1.4rem; }}
+    table {{ border-collapse: collapse; width: 100%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.1); }}
+    th, td {{ padding: .6rem .9rem; border-bottom: 1px solid #e5e5ea; text-align: left; }}
+    th {{ background: #fafafa; font-weight: 600; }}
+  </style>
+</head>
+<body>
+  <h1>MishPulse — состояние проектов</h1>
+  <table>
+    <thead><tr><th>Проект</th><th>Состояние</th><th>Последний пульс</th><th>Последнее сообщение</th></tr></thead>
+    <tbody>{body}</tbody>
+  </table>
+</body>
+</html>"""
+    return HTMLResponse(html)
 
 
 @router.post(
@@ -62,7 +145,7 @@ async def push_status(
     """Принять статус по уникальной ссылке проекта."""
 
     status = service.add_status(token, payload)
-    return StatusResponse(message=status.message, timestamp=status.timestamp)
+    return StatusResponse(level=status.level, message=status.message, timestamp=status.timestamp)
 
 
 @router.get(
@@ -77,4 +160,7 @@ async def list_statuses(
     """Вернуть историю статусов проекта."""
 
     statuses = service.get_statuses(token)
-    return [StatusResponse(message=s.message, timestamp=s.timestamp) for s in statuses]
+    return [
+        StatusResponse(level=s.level, message=s.message, timestamp=s.timestamp)
+        for s in statuses
+    ]
