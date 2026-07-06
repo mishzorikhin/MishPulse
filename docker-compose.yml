@@ -25,6 +25,8 @@ services:
       MISHPULSE_DATABASE_URL: postgresql+psycopg2://mishpulse:mishpulse@db:5432/mishpulse
       MISHPULSE_DEAD_AFTER_SECONDS: "300"
       MISHPULSE_WATCHDOG_INTERVAL_SECONDS: "30"
+      # MISHPULSE_NTFY_SERVER: "https://ntfy.sh"
+      # MISHPULSE_TELEGRAM_BOT_TOKEN: "123456:ABC-DEF"
     depends_on:
       db:
         condition: service_healthy

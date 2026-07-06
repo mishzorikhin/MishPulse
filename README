@@ -8,7 +8,7 @@ Self-hosted сервис, который:
 
 - Принимает статусы от приложений («я жив», «предупреждение», «ошибка»).
 - Определяет, какие приложения «молчат» дольше заданного времени (watchdog).
-- Уведомляет о недоступности или ошибках (лог + webhook).
+- Уведомляет о недоступности или ошибках (ntfy, Telegram, webhook, лог).
 - Показывает состояние всех проектов на минимальном HTML-дашборде.
 
 🚀 Быстрый старт
@@ -45,6 +45,10 @@ Docker Compose (приложение + лёгкий PostgreSQL на Alpine):
   (по умолчанию 30).
 - MISHPULSE_WEBHOOK_URL — если задан, уведомления дополнительно отправляются
   POST-запросом с JSON на этот URL.
+- MISHPULSE_NTFY_SERVER — базовый URL ntfy-сервера по умолчанию
+  (по умолчанию `https://ntfy.sh`).
+- MISHPULSE_TELEGRAM_BOT_TOKEN — токен Telegram-бота по умолчанию для проектов,
+  у которых не задан свой токен.
 
 🗄️ База данных и миграции
 
@@ -56,8 +60,25 @@ Docker Compose (приложение + лёгкий PostgreSQL на Alpine):
 🧩 API
 
 POST /projects
-    Создать проект. Тело: {"name": "my-service"}.
-    Ответ: {"id": "...", "name": "my-service", "link": "/projects/<token>/statuses"}.
+    Создать проект. Тело:
+    {
+      "name": "my-service",
+      "notifications": {
+        "ntfy_topic": "my-service-alerts",
+        "ntfy_server": "https://ntfy.sh",
+        "telegram_chat_id": "123456789",
+        "telegram_bot_token": "123:ABC"
+      }
+    }
+    Поля notifications опциональны. telegram_bot_token и ntfy_server можно не
+    указывать — возьмутся глобальные MISHPULSE_* значения.
+    Ответ: {"id": "...", "name": "...", "link": "...", "notifications": {...}}.
+
+PATCH /projects/{token}/notifications
+    Обновить настройки ntfy/Telegram для проекта.
+
+GET /projects/{token}/notifications
+    Прочитать текущие настройки уведомлений проекта.
 
 POST /projects/{token}/statuses
     Отправить статус. Тело:
@@ -87,8 +108,15 @@ dead и создаётся уведомление (однократно). Ког
 
 📬 Уведомления
 
-Сейчас поддерживаются: лог приложения и webhook (POST с JSON вида
-{"title": "...", "project": "...", ...}). Telegram и Email — в планах.
+При проблемах (status=error/warning, проект помечен как dead) MishPulse шлёт алерты:
+
+- **ntfy** — POST в `{ntfy_server}/{ntfy_topic}` с заголовками Title, Priority, Tags.
+- **Telegram** — через Bot API в указанный chat_id.
+- **Webhook** — глобальный POST с JSON (если задан MISHPULSE_WEBHOOK_URL).
+
+Каналы настраиваются **для каждого проекта** при создании или через
+`PATCH /projects/{token}/notifications`. Сообщение о восстановлении после dead
+идёт только в лог и webhook, без ntfy/Telegram.
 
 🧪 Тесты
 
@@ -121,6 +149,6 @@ dead и создаётся уведомление (однократно). Ког
 
 🗺️ Что дальше
 
-- Уведомления в Telegram и Email.
+- Уведомления по Email.
 - Аутентификация для управляющих эндпоинтов (создание проектов, сводка).
 - Настраиваемый таймаут «смерти» на уровне отдельного проекта.
