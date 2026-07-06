@@ -75,6 +75,56 @@ function badge(health) {
   return `<span class="badge badge-${escapeHtml(health)}">${escapeHtml(HEALTH_LABELS[health] || health)}</span>`;
 }
 
+function enabledBadge(enabled) {
+  return enabled
+    ? '<span class="badge badge-alive">Включён</span>'
+    : '<span class="badge badge-dead">Отключён</span>';
+}
+
+function projectSettingsForm(values = {}, idPrefix = "settings") {
+  const v = (key) => escapeHtml(values[key] ?? "");
+  return `
+    <div class="grid grid-2">
+      <div class="form-group">
+        <label for="${idPrefix}-name">Название</label>
+        <input id="${idPrefix}-name" name="name" value="${v("name")}" required maxlength="200">
+      </div>
+      <div class="form-group">
+        <label for="${idPrefix}-enabled">Мониторинг</label>
+        <select id="${idPrefix}-enabled" name="enabled">
+          <option value="true" ${values.enabled === false ? "" : "selected"}>Включён</option>
+          <option value="false" ${values.enabled === false ? "selected" : ""}>Отключён</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="${idPrefix}-timeout">Timeout, секунд</label>
+        <input id="${idPrefix}-timeout" name="timeout_seconds" type="number" min="1" step="1" value="${v("timeout_seconds")}" placeholder="глобальный">
+      </div>
+      <div class="form-group">
+        <label for="${idPrefix}-retention">Retention истории, дней</label>
+        <input id="${idPrefix}-retention" name="retention_days" type="number" min="0" step="1" value="${v("retention_days")}" placeholder="глобальный; 0 = не чистить">
+      </div>
+    </div>`;
+}
+
+function readProjectSettings(form, includeEmpty = false) {
+  const data = new FormData(form);
+  const payload = {};
+  const name = String(data.get("name") || "").trim();
+  if (name || includeEmpty) payload.name = name;
+  if (data.has("enabled")) payload.enabled = String(data.get("enabled")) === "true";
+
+  for (const key of ["timeout_seconds", "retention_days"]) {
+    const raw = String(data.get(key) || "").trim();
+    if (raw) {
+      payload[key] = key === "timeout_seconds" ? Number(raw) : Number.parseInt(raw, 10);
+    } else if (includeEmpty) {
+      payload[key] = null;
+    }
+  }
+  return payload;
+}
+
 function setActiveNav(route) {
   document.querySelectorAll(".nav a[data-route]").forEach((link) => {
     const target = link.getAttribute("data-route");
@@ -123,8 +173,9 @@ async function pageDashboard() {
       (project) => `
       <tr>
         <td><a href="#/projects/${escapeHtml(project.token)}">${escapeHtml(project.name)}</a></td>
-        <td>${badge(project.health)}</td>
+        <td>${enabledBadge(project.enabled)} ${badge(project.health)}</td>
         <td>${escapeHtml(formatDate(project.last_seen))}</td>
+        <td>${escapeHtml(project.timeout_seconds || "глобальный")}</td>
         <td>${escapeHtml(project.last_message || "—")}</td>
         <td><a class="btn" href="#/projects/${escapeHtml(project.token)}">Управление</a></td>
       </tr>`
@@ -146,6 +197,7 @@ async function pageDashboard() {
             <th>Имя</th>
             <th>Состояние</th>
             <th>Последний пульс</th>
+            <th>Timeout</th>
             <th>Сообщение</th>
             <th></th>
           </tr>
@@ -196,10 +248,8 @@ async function pageNewProject() {
       <h2>Новый проект</h2>
       <p class="muted">После создания вы получите уникальную ссылку для отправки heartbeat.</p>
       <form id="create-form">
-        <div class="form-group">
-          <label for="project-name">Название</label>
-          <input id="project-name" name="name" required maxlength="200" placeholder="api-worker">
-        </div>
+        <h3>Основные настройки</h3>
+        ${projectSettingsForm({ enabled: true }, "new-project")}
         <h3>Уведомления (опционально)</h3>
         ${notificationsForm({}, "new")}
         <div class="actions">
@@ -216,9 +266,8 @@ async function pageNewProject() {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     messageEl.innerHTML = "";
-    const name = String(new FormData(form).get("name") || "").trim();
+    const body = readProjectSettings(form);
     const notifications = readNotifications(form);
-    const body = { name };
     if (Object.keys(notifications).length) body.notifications = notifications;
 
     try {
@@ -272,9 +321,10 @@ async function pageProjectDetail(token) {
           <h2>${escapeHtml(project.name)}</h2>
           <p class="muted">ID: ${escapeHtml(project.id)}</p>
         </div>
-        <div>${badge(project.health)}</div>
+        <div>${enabledBadge(project.enabled)} ${badge(project.health)}</div>
       </div>
       <p>Последний пульс: <strong>${escapeHtml(formatDate(project.last_seen))}</strong></p>
+      <p>Timeout: <strong>${escapeHtml(project.timeout_seconds || "глобальный")}</strong> сек. · Retention: <strong>${escapeHtml(project.retention_days ?? "глобальный")}</strong> дней</p>
       <p>Последнее сообщение: ${escapeHtml(project.last_message || "—")}</p>
       <label class="muted">URL для heartbeat</label>
       <div class="code-box">
@@ -287,6 +337,19 @@ async function pageProjectDetail(token) {
     </div>
 
     <div class="grid grid-2">
+      <div class="card">
+        <h3>Основные настройки</h3>
+        <form id="project-settings-form">
+          ${projectSettingsForm(project, "edit-project")}
+          <div class="actions">
+            <button class="btn btn-primary" type="submit">Сохранить проект</button>
+            <button class="btn" type="button" id="send-test-notification">Тест уведомлений</button>
+            <button class="btn btn-danger" type="button" id="delete-project">Удалить</button>
+          </div>
+        </form>
+        <div id="project-settings-message"></div>
+      </div>
+
       <div class="card">
         <h3>Уведомления</h3>
         <form id="notifications-form">
@@ -313,6 +376,46 @@ async function pageProjectDetail(token) {
     setTimeout(() => {
       button.textContent = "Копировать";
     }, 1500);
+  });
+
+  const projectSettingsFormEl = document.getElementById("project-settings-form");
+  const projectSettingsMessageEl = document.getElementById("project-settings-message");
+  projectSettingsFormEl.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    projectSettingsMessageEl.innerHTML = "";
+    try {
+      await api(`/projects/${token}`, {
+        method: "PATCH",
+        body: JSON.stringify(readProjectSettings(projectSettingsFormEl, true)),
+      });
+      projectSettingsMessageEl.innerHTML =
+        '<div class="alert alert-success">Настройки проекта сохранены.</div>';
+      setTimeout(() => pageProjectDetail(token), 700);
+    } catch (error) {
+      projectSettingsMessageEl.innerHTML = `<div class="alert alert-error">${escapeHtml(error.message)}</div>`;
+    }
+  });
+
+  document.getElementById("send-test-notification").addEventListener("click", async () => {
+    projectSettingsMessageEl.innerHTML = "";
+    try {
+      await api(`/projects/${token}/test-notification`, { method: "POST" });
+      projectSettingsMessageEl.innerHTML =
+        '<div class="alert alert-success">Тестовое уведомление отправлено.</div>';
+    } catch (error) {
+      projectSettingsMessageEl.innerHTML = `<div class="alert alert-error">${escapeHtml(error.message)}</div>`;
+    }
+  });
+
+  document.getElementById("delete-project").addEventListener("click", async () => {
+    if (!confirm(`Удалить проект «${project.name}» и всю историю статусов?`)) return;
+    projectSettingsMessageEl.innerHTML = "";
+    try {
+      await api(`/projects/${token}`, { method: "DELETE" });
+      location.hash = "#/";
+    } catch (error) {
+      projectSettingsMessageEl.innerHTML = `<div class="alert alert-error">${escapeHtml(error.message)}</div>`;
+    }
   });
 
   const notificationsFormEl = document.getElementById("notifications-form");
