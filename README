@@ -32,7 +32,8 @@ Docker Compose (приложение + лёгкий PostgreSQL на Alpine):
     docker run -p 8000:8000 mishpulse
 
 Интерактивная документация API: http://localhost:8000/docs
-Дашборд: http://localhost:8000/dashboard
+Веб-интерфейс управления: http://localhost:8000/ui
+(старый /dashboard перенаправляет на /ui)
 
 ⚙️ Настройки (переменные окружения)
 
@@ -94,7 +95,10 @@ GET /projects/summary
     [{"id": "...", "name": "svc", "health": "alive", "last_seen": "...", "last_message": "..."}]
 
 GET /dashboard
-    HTML-страница со статусами: 🟢 alive, 🟠 warning/error, 🔴 dead.
+    Перенаправление на /ui (веб-интерфейс управления).
+
+GET /ui
+    SPA: список проектов, создание, настройка уведомлений, история статусов.
 
 GET /health
     Проверка живости самого сервиса.

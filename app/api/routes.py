@@ -1,13 +1,9 @@
 """API router definitions for MishPulse service."""
 
-from html import escape
-
 from fastapi import APIRouter, Depends
-from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import ProjectHealth
 from ..schemas import (
     ProjectCreateRequest,
     ProjectNotificationsSchema,
@@ -19,13 +15,6 @@ from ..schemas import (
 from ..services import ProjectService, project_service
 
 router = APIRouter(tags=["system"])
-
-_HEALTH_ICONS = {
-    ProjectHealth.ALIVE: "🟢",
-    ProjectHealth.WARNING: "🟠",
-    ProjectHealth.ERROR: "🟠",
-    ProjectHealth.DEAD: "🔴",
-}
 
 
 def get_project_service() -> ProjectService:
@@ -86,60 +75,13 @@ async def projects_summary(
         ProjectStateResponse(
             id=project.id,
             name=project.name,
+            token=project.token,
             health=project.health,
             last_seen=project.last_seen,
             last_message=project.last_message,
         )
         for project in service.get_project_states(session)
     ]
-
-
-@router.get(
-    "/dashboard",
-    response_class=HTMLResponse,
-    summary="Минимальный HTML-дашборд состояния проектов",
-)
-async def dashboard(
-    session: Session = Depends(get_db),
-    service: ProjectService = Depends(get_project_service),
-) -> HTMLResponse:
-    """Простая HTML-страница со статусами всех проектов."""
-
-    rows = []
-    for project in service.get_project_states(session):
-        icon = _HEALTH_ICONS[project.health]
-        rows.append(
-            "<tr>"
-            f"<td>{icon} {escape(project.name)}</td>"
-            f"<td>{escape(project.health.value)}</td>"
-            f"<td>{escape(project.last_seen.strftime('%Y-%m-%d %H:%M:%S %Z'))}</td>"
-            f"<td>{escape(project.last_message or '')}</td>"
-            "</tr>"
-        )
-    body = "".join(rows) or '<tr><td colspan="4">Проектов пока нет</td></tr>'
-    html = f"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta http-equiv="refresh" content="30">
-  <title>MishPulse — дашборд</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; margin: 2rem; background: #f7f7f9; color: #222; }}
-    h1 {{ font-size: 1.4rem; }}
-    table {{ border-collapse: collapse; width: 100%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.1); }}
-    th, td {{ padding: .6rem .9rem; border-bottom: 1px solid #e5e5ea; text-align: left; }}
-    th {{ background: #fafafa; font-weight: 600; }}
-  </style>
-</head>
-<body>
-  <h1>MishPulse — состояние проектов</h1>
-  <table>
-    <thead><tr><th>Проект</th><th>Состояние</th><th>Последний пульс</th><th>Последнее сообщение</th></tr></thead>
-    <tbody>{body}</tbody>
-  </table>
-</body>
-</html>"""
-    return HTMLResponse(html)
 
 
 @router.get(

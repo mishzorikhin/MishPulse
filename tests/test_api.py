@@ -96,11 +96,17 @@ def test_summary_reflects_project_health(client) -> None:
     assert summary[0]["last_message"] == "watch out"
 
 
-def test_dashboard_renders_projects(client) -> None:
-    link = _create_project(client, name="дашборд-сервис")
-    client.post(link, json={"message": "пульс"})
+def test_dashboard_redirects_to_ui(client) -> None:
+    response = client.get("/dashboard", follow_redirects=False)
+    assert response.status_code == 302
+    assert "/ui" in response.headers["location"]
 
-    response = client.get("/dashboard")
+
+def test_summary_includes_token(client) -> None:
+    link = _create_project(client, name="token-svc")
+    token = link.split("/")[2]
+
+    response = client.get("/projects/summary")
     assert response.status_code == 200
-    assert "дашборд-сервис" in response.text
-    assert "пульс" in response.text
+    summary = response.json()
+    assert summary[0]["token"] == token

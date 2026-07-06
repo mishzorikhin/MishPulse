@@ -61,6 +61,7 @@ class ProjectStateResponse(BaseModel):
 
     id: UUID = Field(..., description="Уникальный идентификатор проекта")
     name: str = Field(..., description="Название проекта")
+    token: str = Field(..., description="Токен проекта для heartbeat и управления")
     health: ProjectHealth = Field(..., description="Текущее состояние проекта")
     last_seen: datetime = Field(..., description="Время последнего пульса")
     last_message: str | None = Field(
