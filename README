@@ -42,6 +42,8 @@ Docker Compose (приложение + лёгкий PostgreSQL на Alpine):
   `postgresql+psycopg2://mishpulse:mishpulse@db:5432/mishpulse`).
 - MISHPULSE_DEAD_AFTER_SECONDS — через сколько секунд молчания проект считается
   «мёртвым» (по умолчанию 300).
+- MISHPULSE_STATUS_RETENTION_DAYS — сколько дней хранить историю статусов
+  по умолчанию (по умолчанию 30; у проекта можно переопределить, 0 отключает очистку).
 - MISHPULSE_WATCHDOG_INTERVAL_SECONDS — как часто watchdog проверяет пульс
   (по умолчанию 30).
 - MISHPULSE_WEBHOOK_URL — если задан, уведомления дополнительно отправляются
@@ -71,6 +73,8 @@ POST /projects
     Создать проект. Тело:
     {
       "name": "my-service",
+      "timeout_seconds": 300,
+      "retention_days": 30,
       "notifications": {
         "ntfy_topic": "my-service-alerts",
         "ntfy_server": "https://ntfy.sh",
@@ -82,11 +86,21 @@ POST /projects
     указывать — возьмутся глобальные MISHPULSE_* значения.
     Ответ: {"id": "...", "name": "...", "link": "...", "notifications": {...}}.
 
+PATCH /projects/{token}
+    Обновить проект: name, enabled, timeout_seconds, retention_days.
+    enabled=false отключает мониторинг и отклоняет новые heartbeat с 403.
+
+DELETE /projects/{token}
+    Удалить проект и всю историю статусов.
+
 PATCH /projects/{token}/notifications
     Обновить настройки ntfy/Telegram для проекта.
 
 GET /projects/{token}/notifications
     Прочитать текущие настройки уведомлений проекта.
+
+POST /projects/{token}/test-notification
+    Отправить тестовый алерт в настроенные каналы проекта.
 
 POST /projects/{token}/statuses
     Отправить статус. Тело:
@@ -99,23 +113,28 @@ GET /projects/{token}/statuses
 
 GET /projects/summary
     Состояние всех проектов:
-    [{"id": "...", "name": "svc", "health": "alive", "last_seen": "...", "last_message": "..."}]
+    [{"id": "...", "name": "svc", "enabled": true, "health": "alive", "timeout_seconds": 300, "last_seen": "..."}]
+
+POST /maintenance/cleanup-statuses
+    Запустить ручную очистку старой истории статусов по retention-настройкам.
 
 GET /dashboard
     Перенаправление на /ui (веб-интерфейс управления).
 
 GET /ui
-    SPA: список проектов, создание, настройка уведомлений, история статусов.
+    SPA: список проектов, создание, редактирование, включение/выключение,
+    удаление, настройка уведомлений, тест уведомлений, история статусов.
 
 GET /health
     Проверка живости самого сервиса.
 
 🧠 Логика проверки (Watchdog)
 
-Фоновая задача каждые N секунд проверяет now - last_seen каждого проекта.
-Если молчание дольше MISHPULSE_DEAD_AFTER_SECONDS — проект помечается как
-dead и создаётся уведомление (однократно). Когда «мёртвый» проект снова
-присылает статус, он оживает и отправляется уведомление о восстановлении.
+Фоновая задача каждые N секунд проверяет now - last_seen каждого включённого
+проекта. Если молчание дольше timeout проекта (или MISHPULSE_DEAD_AFTER_SECONDS)
+— проект помечается как dead и создаётся уведомление (однократно). Когда
+«мёртвый» проект снова присылает статус, он оживает и отправляется уведомление
+о восстановлении. В этом же цикле применяется retention cleanup истории.
 
 📬 Уведомления
 
