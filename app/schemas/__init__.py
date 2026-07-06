@@ -3,6 +3,7 @@
 from .project import (
     ProjectCreateRequest,
     ProjectResponse,
+    ProjectStateResponse,
     StatusCreateRequest,
     StatusResponse,
 )
@@ -10,6 +11,7 @@ from .project import (
 __all__ = [
     "ProjectCreateRequest",
     "ProjectResponse",
+    "ProjectStateResponse",
     "StatusCreateRequest",
     "StatusResponse",
 ]
