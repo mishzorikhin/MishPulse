@@ -1,6 +1,10 @@
 /** MishPulse web UI — hash-router SPA. */
 
-const appEl = document.getElementById("app");
+const THEME_STORAGE_KEY = "mishpulse-theme";
+
+function getAppEl() {
+  return document.getElementById("app-content");
+}
 
 const HEALTH_LABELS = {
   alive: "Жив",
@@ -72,13 +76,114 @@ function formatDate(iso) {
 }
 
 function badge(health) {
-  return `<span class="badge badge-${escapeHtml(health)}">${escapeHtml(HEALTH_LABELS[health] || health)}</span>`;
+  const cls =
+    health === "alive"
+      ? "badge-alive"
+      : health === "warning"
+        ? "badge-warning"
+        : health === "error" || health === "dead"
+          ? "badge-error"
+          : "badge-neutral";
+  return `<span class="badge ${cls}">${escapeHtml(HEALTH_LABELS[health] || health)}</span>`;
 }
 
 function enabledBadge(enabled) {
   return enabled
     ? '<span class="badge badge-alive">Включён</span>'
-    : '<span class="badge badge-dead">Отключён</span>';
+    : '<span class="badge badge-neutral">Отключён</span>';
+}
+
+function levelClass(level) {
+  if (level === "ok") return "status-level-ok";
+  if (level === "warning") return "status-level-warning";
+  if (level === "error") return "status-level-error";
+  return "";
+}
+
+function summarizeProjects(projects) {
+  const enabled = projects.filter((p) => p.enabled);
+  const dead = enabled.filter((p) => p.health === "dead").length;
+  const errors = enabled.filter((p) => p.health === "error").length;
+  const warnings = enabled.filter((p) => p.health === "warning").length;
+  const alive = enabled.filter((p) => p.health === "alive").length;
+  const problemCount = dead + errors;
+
+  let state = "ok";
+  let headline = "Всё работает штатно";
+  if (!projects.length) {
+    state = "empty";
+    headline = "Проектов пока нет";
+  } else if (problemCount > 0) {
+    state = "bad";
+    headline = problemCount === 1 ? "1 проект требует внимания" : `${problemCount} проектов требуют внимания`;
+  } else if (warnings > 0) {
+    state = "warn";
+    headline = warnings === 1 ? "1 предупреждение" : `${warnings} предупреждений`;
+  } else if (enabled.length === 0) {
+    state = "empty";
+    headline = "Все проекты отключены";
+  }
+
+  return {
+    state,
+    headline,
+    total: projects.length,
+    enabled: enabled.length,
+    alive,
+    dead,
+    errors,
+    warnings,
+    problemCount,
+  };
+}
+
+function statusHero(summary) {
+  const figure =
+    summary.state === "bad"
+      ? String(summary.problemCount)
+      : summary.state === "warn"
+        ? String(summary.warnings)
+        : summary.state === "empty"
+          ? "—"
+          : String(summary.alive);
+
+  const detail =
+    summary.total === 0
+      ? "Создайте первый проект для мониторинга heartbeat"
+      : `${summary.total} проектов · ${summary.enabled} включено · ${summary.alive} живых · ${summary.dead + summary.errors} проблем`;
+
+  return `
+    <div class="status-hero ${escapeHtml(summary.state)}">
+      <span class="status-dot" aria-hidden="true"></span>
+      <div class="status-hero-body">
+        <h2 class="status-hero-headline">${escapeHtml(summary.headline)}</h2>
+        <p class="status-hero-summary">${escapeHtml(detail)}</p>
+      </div>
+      <div class="status-hero-figure">${escapeHtml(figure)}</div>
+    </div>`;
+}
+
+function statGrid(summary) {
+  if (!summary.total) return "";
+  return `
+    <div class="stat-grid">
+      <div class="stat-card accent-cap">
+        <span class="stat-label">Всего проектов</span>
+        <span class="stat-value">${summary.total}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Включено</span>
+        <span class="stat-value">${summary.enabled}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Живых</span>
+        <span class="stat-value">${summary.alive}</span>
+      </div>
+      <div class="stat-card ${summary.problemCount ? "error-cap" : ""}">
+        <span class="stat-label">Проблем</span>
+        <span class="stat-value ${summary.problemCount ? "error-value" : ""}">${summary.problemCount}</span>
+      </div>
+    </div>`;
 }
 
 function projectSettingsForm(values = {}, idPrefix = "settings") {
@@ -126,7 +231,7 @@ function readProjectSettings(form, includeEmpty = false) {
 }
 
 function setActiveNav(route) {
-  document.querySelectorAll(".nav a[data-route]").forEach((link) => {
+  document.querySelectorAll(".nav-tab[data-route]").forEach((link) => {
     const target = link.getAttribute("data-route");
     const active =
       target === route ||
@@ -137,11 +242,11 @@ function setActiveNav(route) {
 }
 
 function renderLoading() {
-  appEl.innerHTML = `<div class="card"><p class="muted">Загрузка…</p></div>`;
+  getAppEl().innerHTML = `<div class="loading-state">Загрузка…</div>`;
 }
 
 function renderError(message) {
-  appEl.innerHTML = `<div class="alert alert-error">${escapeHtml(message)}</div>`;
+  getAppEl().innerHTML = `<div class="alert alert-error">${escapeHtml(message)}</div>`;
 }
 
 async function copyText(text) {
@@ -157,13 +262,21 @@ async function pageDashboard() {
   renderLoading();
   setActiveNav("/");
   const projects = await api("/projects/summary");
+  const summary = summarizeProjects(projects);
 
   if (!projects.length) {
-    appEl.innerHTML = `
-      <div class="card empty">
-        <h2>Проектов пока нет</h2>
-        <p class="muted">Создайте первый проект и получите ссылку для heartbeat.</p>
-        <p><a class="btn btn-primary" href="#/projects/new">Создать проект</a></p>
+    getAppEl().innerHTML = `
+      <div class="page-hero">
+        <div>
+          <h1>Проекты</h1>
+          <p class="subtitle">Мониторинг heartbeat</p>
+        </div>
+        <a class="btn btn-primary" href="#/projects/new">Новый проект</a>
+      </div>
+      ${statusHero(summary)}
+      <div class="empty-state">
+        <p>Создайте первый проект и получите ссылку для heartbeat.</p>
+        <p class="actions"><a class="btn btn-primary" href="#/projects/new">Создать проект</a></p>
       </div>`;
     return;
   }
@@ -175,23 +288,25 @@ async function pageDashboard() {
         <td><a href="#/projects/${escapeHtml(project.token)}">${escapeHtml(project.name)}</a></td>
         <td>${enabledBadge(project.enabled)} ${badge(project.health)}</td>
         <td>${escapeHtml(formatDate(project.last_seen))}</td>
-        <td>${escapeHtml(project.timeout_seconds || "глобальный")}</td>
+        <td class="num">${escapeHtml(project.timeout_seconds || "—")}</td>
         <td>${escapeHtml(project.last_message || "—")}</td>
         <td><a class="btn" href="#/projects/${escapeHtml(project.token)}">Управление</a></td>
       </tr>`
     )
     .join("");
 
-  appEl.innerHTML = `
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
-        <div>
-          <h2>Проекты</h2>
-          <p class="muted">Обновляется при переходе между страницами. Всего: ${projects.length}</p>
-        </div>
-        <a class="btn btn-primary" href="#/projects/new">+ Новый проект</a>
+  getAppEl().innerHTML = `
+    <div class="page-hero">
+      <div>
+        <h1>Проекты</h1>
+        <p class="subtitle">Обновляется каждые 30 с · всего ${projects.length}</p>
       </div>
-      <table>
+      <a class="btn btn-primary" href="#/projects/new">Новый проект</a>
+    </div>
+    ${statusHero(summary)}
+    ${statGrid(summary)}
+    <div class="data-table-wrap">
+      <table class="data-table">
         <thead>
           <tr>
             <th>Имя</th>
@@ -243,14 +358,18 @@ function readNotifications(form) {
 
 async function pageNewProject() {
   setActiveNav("/projects/new");
-  appEl.innerHTML = `
+  getAppEl().innerHTML = `
+    <div class="page-hero">
+      <div>
+        <h1>Новый проект</h1>
+        <p class="subtitle">После создания — уникальная ссылка для heartbeat</p>
+      </div>
+    </div>
     <div class="card">
-      <h2>Новый проект</h2>
-      <p class="muted">После создания вы получите уникальную ссылку для отправки heartbeat.</p>
       <form id="create-form">
-        <h3>Основные настройки</h3>
+        <h3 class="section-title">Основные настройки</h3>
         ${projectSettingsForm({ enabled: true }, "new-project")}
-        <h3>Уведомления (опционально)</h3>
+        <h3 class="section-title">Уведомления (опционально)</h3>
         ${notificationsForm({}, "new")}
         <div class="actions">
           <button class="btn btn-primary" type="submit">Создать</button>
@@ -284,13 +403,13 @@ async function pageProjectDetail(token) {
   renderLoading();
   setActiveNav("/");
 
-  const [summary, notifications, statuses] = await Promise.all([
+  const [summaryList, notifications, statuses] = await Promise.all([
     api("/projects/summary"),
     api(`/projects/${token}/notifications`),
     api(`/projects/${token}/statuses`),
   ]);
 
-  const project = summary.find((item) => item.token === token);
+  const project = summaryList.find((item) => item.token === token);
   if (!project) {
     renderError("Проект не найден. Проверьте ссылку или token.");
     return;
@@ -305,7 +424,7 @@ async function pageProjectDetail(token) {
         .map(
           (status) => `
         <li>
-          <strong>${escapeHtml(LEVEL_LABELS[status.level] || status.level)}</strong>
+          <strong class="${levelClass(status.level)}">${escapeHtml(LEVEL_LABELS[status.level] || status.level)}</strong>
           <span class="muted"> · ${escapeHtml(formatDate(status.timestamp))}</span>
           <div>${escapeHtml(status.message || "—")}</div>
         </li>`
@@ -313,32 +432,59 @@ async function pageProjectDetail(token) {
         .join("")
     : `<li class="muted">Статусов пока нет</li>`;
 
-  appEl.innerHTML = `
+  const heroState =
+    project.health === "dead" || project.health === "error"
+      ? "bad"
+      : project.health === "warning"
+        ? "warn"
+        : project.enabled
+          ? "ok"
+          : "empty";
+
+  const heroHeadline =
+    project.health === "dead"
+      ? "Проект не отвечает"
+      : project.health === "error"
+        ? "Ошибка в последнем статусе"
+        : project.health === "warning"
+          ? "Предупреждение"
+          : project.enabled
+            ? "Работает штатно"
+            : "Мониторинг отключён";
+
+  getAppEl().innerHTML = `
     ${created ? '<div class="alert alert-success">Проект создан. Сохраните ссылку для heartbeat.</div>' : ""}
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start;">
-        <div>
-          <h2>${escapeHtml(project.name)}</h2>
-          <p class="muted">ID: ${escapeHtml(project.id)}</p>
-        </div>
-        <div>${enabledBadge(project.enabled)} ${badge(project.health)}</div>
+    <div class="page-hero">
+      <div>
+        <h1>${escapeHtml(project.name)}</h1>
+        <p class="subtitle">ID: ${escapeHtml(project.id)}</p>
       </div>
-      <p>Последний пульс: <strong>${escapeHtml(formatDate(project.last_seen))}</strong></p>
-      <p>Timeout: <strong>${escapeHtml(project.timeout_seconds || "глобальный")}</strong> сек. · Retention: <strong>${escapeHtml(project.retention_days ?? "глобальный")}</strong> дней</p>
-      <p>Последнее сообщение: ${escapeHtml(project.last_message || "—")}</p>
-      <label class="muted">URL для heartbeat</label>
+      <div class="detail-badges">${enabledBadge(project.enabled)} ${badge(project.health)}</div>
+    </div>
+
+    <div class="status-hero ${heroState}">
+      <span class="status-dot" aria-hidden="true"></span>
+      <div class="status-hero-body">
+        <h2 class="status-hero-headline">${escapeHtml(heroHeadline)}</h2>
+        <p class="status-hero-summary">Последний пульс: ${escapeHtml(formatDate(project.last_seen))} · timeout ${escapeHtml(project.timeout_seconds || "глобальный")} с · retention ${escapeHtml(project.retention_days ?? "глобальный")} дн.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="muted">Последнее сообщение: ${escapeHtml(project.last_message || "—")}</p>
+      <label class="field-label">URL для heartbeat</label>
       <div class="code-box">
         <span id="heartbeat-url">${escapeHtml(heartbeatUrl)}</span>
         <button class="btn" type="button" id="copy-heartbeat">Копировать</button>
       </div>
-      <pre class="muted" style="margin-top:0.75rem;white-space:pre-wrap;">curl -X POST '${escapeHtml(heartbeatUrl)}' \\
+      <pre class="code-snippet">curl -X POST '${escapeHtml(heartbeatUrl)}' \\
   -H 'Content-Type: application/json' \\
   -d '{"level":"ok","message":"alive"}'</pre>
     </div>
 
     <div class="grid grid-2">
       <div class="card">
-        <h3>Основные настройки</h3>
+        <h3 class="section-title">Основные настройки</h3>
         <form id="project-settings-form">
           ${projectSettingsForm(project, "edit-project")}
           <div class="actions">
@@ -351,7 +497,7 @@ async function pageProjectDetail(token) {
       </div>
 
       <div class="card">
-        <h3>Уведомления</h3>
+        <h3 class="section-title">Уведомления</h3>
         <form id="notifications-form">
           ${notificationsForm(notifications, "edit")}
           <div class="actions">
@@ -362,7 +508,7 @@ async function pageProjectDetail(token) {
       </div>
 
       <div class="card">
-        <h3>История статусов</h3>
+        <h3 class="section-title">История статусов</h3>
         <ul class="status-list">${statusItems}</ul>
       </div>
     </div>
@@ -439,7 +585,23 @@ async function pageProjectDetail(token) {
 function updateNavAuth() {
   const logout = document.getElementById("logout-btn");
   if (!logout) return;
-  logout.style.display = authState.required && authState.authenticated ? "inline-flex" : "none";
+  logout.classList.toggle("hidden", !(authState.required && authState.authenticated));
+}
+
+function initThemeToggle() {
+  const button = document.getElementById("btn-theme");
+  if (!button) return;
+
+  button.addEventListener("click", () => {
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+    if (isDark) {
+      document.documentElement.removeAttribute("data-theme");
+      localStorage.setItem(THEME_STORAGE_KEY, "light");
+    } else {
+      document.documentElement.setAttribute("data-theme", "dark");
+      localStorage.setItem(THEME_STORAGE_KEY, "dark");
+    }
+  });
 }
 
 async function refreshAuthState() {
@@ -452,20 +614,23 @@ async function refreshAuthState() {
 
 async function pageLogin() {
   setActiveNav("");
-  appEl.innerHTML = `
-    <div class="card" style="max-width:420px;margin:2rem auto;">
-      <h2>Вход</h2>
-      <p class="muted">Введите пароль администратора MishPulse.</p>
-      <form id="login-form">
-        <div class="form-group">
-          <label for="login-password">Пароль</label>
-          <input id="login-password" name="password" type="password" required autocomplete="current-password">
-        </div>
-        <div class="actions">
-          <button class="btn btn-primary" type="submit">Войти</button>
-        </div>
-      </form>
-      <div id="login-message"></div>
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <div class="login-wrap">
+      <div class="login-card">
+        <h1 class="section-title">Вход</h1>
+        <p class="muted">Пароль администратора MishPulse</p>
+        <form id="login-form">
+          <div class="form-group">
+            <label for="login-password">Пароль</label>
+            <input id="login-password" name="password" type="password" required autocomplete="current-password">
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary" type="submit">Войти</button>
+          </div>
+        </form>
+        <div id="login-message"></div>
+      </div>
     </div>`;
 
   document.getElementById("login-form").addEventListener("submit", async (event) => {
@@ -485,11 +650,19 @@ async function pageLogin() {
       }
       sessionStorage.setItem(AUTH_STORAGE_KEY, password);
       await refreshAuthState();
+      main.innerHTML = '<div id="app-content" class="view"></div>';
       location.hash = "#/";
     } catch (error) {
       messageEl.innerHTML = `<div class="alert alert-error">${escapeHtml(error.message)}</div>`;
     }
   });
+}
+
+function ensureAppContent() {
+  const main = document.getElementById("main");
+  if (!document.getElementById("app-content")) {
+    main.innerHTML = '<div id="app-content" class="view"></div>';
+  }
 }
 
 async function router() {
@@ -514,6 +687,8 @@ async function router() {
       await pageLogin();
       return;
     }
+
+    ensureAppContent();
 
     if (path === "/" || path === "") {
       await pageDashboard();
@@ -541,10 +716,10 @@ document.getElementById("logout-btn")?.addEventListener("click", () => {
   location.hash = "#/login";
 });
 
+initThemeToggle();
 window.addEventListener("hashchange", router);
 router();
 
-// Автообновление дашборда каждые 30 секунд, если открыт список проектов
 setInterval(() => {
   const path = (location.hash.replace(/^#/, "") || "/").split("?")[0];
   if (path === "/" || path === "") router();

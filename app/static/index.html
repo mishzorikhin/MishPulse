@@ -4,23 +4,43 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MishPulse</title>
+  <script>
+    (function () {
+      var key = "mishpulse-theme";
+      var stored = localStorage.getItem(key);
+      if (stored === "dark" || (!stored && matchMedia("(prefers-color-scheme: dark)").matches)) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
-  <div class="layout">
+  <div id="app">
     <header class="topbar">
       <a class="brand" href="#/">
         <span class="brand-dot pulse"></span>
         MishPulse
       </a>
-      <nav class="nav">
-        <a href="#/" data-route="/">Проекты</a>
-        <a href="#/projects/new" data-route="/projects/new">Новый проект</a>
-        <button class="btn" type="button" id="logout-btn" style="display:none">Выйти</button>
-        <a href="/docs" target="_blank" rel="noopener">API</a>
-      </nav>
+      <div class="topbar-actions">
+        <nav class="nav">
+          <a class="nav-tab" href="#/" data-route="/">Проекты</a>
+          <a class="nav-tab" href="#/projects/new" data-route="/projects/new">Новый проект</a>
+          <a class="nav-tab" href="/docs" target="_blank" rel="noopener">API</a>
+        </nav>
+        <button class="btn btn-icon" type="button" id="btn-theme" title="Сменить тему" aria-label="Сменить тему">
+          <span class="icon-moon" aria-hidden="true">☾</span>
+          <span class="icon-sun" aria-hidden="true">☀</span>
+        </button>
+        <button class="btn hidden" type="button" id="logout-btn">Выйти</button>
+      </div>
     </header>
-    <main id="app"></main>
+    <main id="main">
+      <div id="app-content" class="view"></div>
+    </main>
   </div>
   <script src="/static/js/app.js" type="module"></script>
 </body>
